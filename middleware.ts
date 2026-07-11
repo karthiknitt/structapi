@@ -9,8 +9,9 @@ export function middleware(request: NextRequest) {
   const cookie = getSessionCookie(request);
   if (!cookie) {
     const url = new URL("/signin", request.url);
-    if (request.nextUrl.pathname.startsWith("/eve") ||
-        request.nextUrl.pathname.startsWith("/outputs")) {
+    const p = request.nextUrl.pathname;
+    if (p.startsWith("/eve") || p.startsWith("/outputs") ||
+        p.startsWith("/api/models")) {
       return new NextResponse("unauthorized", { status: 401 });
     }
     return NextResponse.redirect(url);
@@ -19,5 +20,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/eve/:path*", "/outputs/:path*"],
+  matcher: ["/", "/settings", "/eve/:path*", "/outputs/:path*", "/api/models"],
 };

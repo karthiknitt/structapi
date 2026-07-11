@@ -26,6 +26,9 @@ export default function Page() {
           StructAgent <span className="dim">— IS-code structural design</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "0.9rem" }}>
+          <a href="/settings" style={{ color: "#9aa4b2", fontSize: "0.85rem" }}>
+            Models
+          </a>
           {session?.user ? (
             <>
               <span className="dim" style={{ fontSize: "0.85rem" }}>

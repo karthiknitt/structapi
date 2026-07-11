@@ -1,8 +1,42 @@
 "use client";
 
-import { signIn } from "../../lib/auth-client";
+import { useState } from "react";
+import { authClient, signIn } from "../../lib/auth-client";
+
+const field: React.CSSProperties = {
+  width: "100%",
+  padding: "0.6rem 0.8rem",
+  borderRadius: 8,
+  border: "1px solid #2d3543",
+  background: "#0f141d",
+  color: "#e6e6e6",
+  fontSize: "0.95rem",
+};
 
 export default function SignInPage() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    const res =
+      mode === "signin"
+        ? await authClient.signIn.email({ email, password })
+        : await authClient.signUp.email({ email, password, name: name || email });
+    setBusy(false);
+    if (res.error) {
+      setError(res.error.message ?? "Authentication failed");
+    } else {
+      window.location.href = "/";
+    }
+  }
+
   return (
     <main
       style={{
@@ -11,28 +45,96 @@ export default function SignInPage() {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        gap: "1.5rem",
+        gap: "1.25rem",
         background: "#0b0e14",
         color: "#e6e6e6",
         fontFamily: "system-ui, sans-serif",
       }}
     >
-      <h1 style={{ fontSize: "1.5rem", fontWeight: 600 }}>
+      <h1 style={{ fontSize: "1.4rem", fontWeight: 600 }}>
         StructAgent — IS-code structural design
       </h1>
-      <p style={{ color: "#9aa4b2", maxWidth: 420, textAlign: "center" }}>
-        Sign in to design beams, columns, footings, slabs, tanks and concrete
-        mixes per the Indian Standards.
-      </p>
+
+      <form
+        onSubmit={submit}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.7rem",
+          width: 340,
+          padding: "1.4rem",
+          borderRadius: 12,
+          border: "1px solid #1f2634",
+          background: "#111622",
+        }}
+      >
+        {mode === "signup" && (
+          <input
+            style={field}
+            placeholder="Name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        )}
+        <input
+          style={field}
+          type="email"
+          required
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <input
+          style={field}
+          type="password"
+          required
+          minLength={8}
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+        {error && (
+          <div style={{ color: "#f87171", fontSize: "0.85rem" }}>{error}</div>
+        )}
+        <button
+          type="submit"
+          disabled={busy}
+          style={{
+            ...field,
+            background: "#2563eb",
+            border: "none",
+            cursor: "pointer",
+            fontWeight: 600,
+          }}
+        >
+          {busy ? "…" : mode === "signin" ? "Sign in" : "Create account"}
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
+          style={{
+            background: "none",
+            border: "none",
+            color: "#9aa4b2",
+            fontSize: "0.82rem",
+            cursor: "pointer",
+          }}
+        >
+          {mode === "signin"
+            ? "No account? Create one"
+            : "Have an account? Sign in"}
+        </button>
+      </form>
+
+      <div style={{ color: "#5b6472", fontSize: "0.8rem" }}>— or —</div>
+
       <button
-        onClick={() =>
-          signIn.social({ provider: "google", callbackURL: "/" })
-        }
+        onClick={() => signIn.social({ provider: "google", callbackURL: "/" })}
         style={{
           display: "flex",
           alignItems: "center",
           gap: "0.6rem",
-          padding: "0.7rem 1.4rem",
+          padding: "0.65rem 1.3rem",
           borderRadius: 8,
           border: "1px solid #2d3543",
           background: "#161b26",

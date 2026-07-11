@@ -41,7 +41,19 @@ Fill in:
 pnpm db:up          # postgres:16 on host port 5544 (user/pass/db = world)
 pnpm db:migrate     # workflow durability schema (workflow-postgres-setup)
 pnpm auth:migrate   # BetterAuth tables (user/session/account/verification)
+pnpm seed:users     # create the test users below
 ```
+
+**Seeded test users** (email + password sign-in; no email verification):
+
+| Email | Password |
+|---|---|
+| umashankar@simplicontract.com | StructAgent@2026 |
+| engineer@structagent.test | Engineer@123 |
+| viewer@structagent.test | Viewer@123 |
+
+Google OAuth (step 3) is optional if you sign in with these. New accounts
+can also be created from the sign-in page ("Create one").
 
 ## 5. Sandbox image (the specialists' Python runtime; deny-all egress)
 ```bash
@@ -64,7 +76,16 @@ PNGs) requires a signed-in session. The eve host on port 2000 itself is
 unauthenticated (steve pattern, `auth: none()`) — don't expose 2000 beyond
 localhost; only the Next app (3001) should be reachable.
 
-## 7. Smoke tests
+## 7. Choosing models (OpenRouter)
+Open **http://localhost:3001/settings** (authenticated). Two pickers —
+**Orchestrator** (main agent) and **Specialist subagents** (all 8) — listing
+the live OpenRouter catalog (fetched from openrouter.ai/api/v1/models, with a
+curated fallback). Saving writes `config/models.json`; **restart the agent
+host** (`pnpm dev` / `pnpm tui`) to apply. Precedence: config/models.json →
+`OPENROUTER_MODEL`/`OPENROUTER_SUBAGENT_MODEL` env → default
+(anthropic/claude-sonnet-5).
+
+## 8. Smoke tests
 1. In the web UI: *"Design an RCC simply supported beam: span 6 m, live load
    15 kN/m, M25, Fe500, moderate exposure."* → expect clause-referenced
    checks and an inline SFD/BMD PNG (also lands in `outputs/<session>/`).
