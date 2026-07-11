@@ -25,6 +25,9 @@ export default defineTool({
   async execute({ sandboxPath, name }, ctx) {
     const sandbox = await ctx.getSandbox();
     const data = await sandbox.readBinaryFile({ path: sandboxPath });
+    if (!data) {
+      throw new Error(`file not found in sandbox: ${sandboxPath}`);
+    }
     const sessionId = ctx.session?.id ?? "session";
     const base = name ?? sandboxPath.split("/").pop() ?? "artifact.bin";
     const dir = join(process.cwd(), "outputs", String(sessionId));
@@ -33,7 +36,7 @@ export default defineTool({
     writeFileSync(hostPath, Buffer.from(data));
     return {
       hostPath: hostPath.replace(process.cwd(), "").replace(/\\/g, "/"),
-      bytes: data.byteLength ?? (data as Buffer).length,
+      bytes: data.byteLength,
     };
   },
 });

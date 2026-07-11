@@ -16,7 +16,9 @@
     "db:up": "docker compose up -d postgres",
     "db:migrate": "workflow-postgres-setup",
     "observe": "workflow inspect runs --backend @workflow/world-postgres",
-    "session": "curl -s -X POST http://localhost:2000/eve/v1/session -H \"Content-Type: application/json\" -d \"{\\\"message\\\": \\\"Design an RCC simply supported beam: span 6 m, live load 15 kN/m, M25 concrete, Fe500 steel, per IS 456:2000.\\\"}\""
+    "session": "curl -s -X POST http://localhost:2000/eve/v1/session -H \"Content-Type: application/json\" -d \"{\\\"message\\\": \\\"Design an RCC simply supported beam: span 6 m, live load 15 kN/m, M25 concrete, Fe500 steel, per IS 456:2000.\\\"}\"",
+    "web": "next dev -p 3001",
+    "web:build": "next build"
   },
   "dependencies": {
     "@ai-sdk/openai": "3.0.74",
@@ -24,11 +26,18 @@
     "@workflow/world-postgres": "5.0.0-beta.19",
     "ai": "7.0.0-beta.178",
     "eve": "0.15.0",
+    "next": "^16.2.10",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "workflow": "4.5.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "24.x",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
     "typescript": "^5.9.0"
   },
   "engines": {

@@ -2,7 +2,7 @@ import { defineAgent } from "eve";
 import {
   CONTEXT_WINDOW_TOKENS,
   subagentModel,
-} from "../../lib/openrouter";
+} from "../../lib/openrouter.js";
 
 export default defineAgent({
   model: subagentModel(),
