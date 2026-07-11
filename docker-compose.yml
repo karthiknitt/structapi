@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: structagent-postgres
+    environment:
+      POSTGRES_USER: world
+      POSTGRES_PASSWORD: world
+      POSTGRES_DB: world
+    ports:
+      - "5544:5432"
+    volumes:
+      - structagent-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U world -d world"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  structagent-pgdata:

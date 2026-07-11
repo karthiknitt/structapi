@@ -19,7 +19,9 @@ def kt_tension(fs: float, pt: float) -> float:
     fs = 0.58 fy (Ast_reqd / Ast_prov), pt = 100 Ast/(b d).
     """
     pt = max(pt, 0.05)
-    kt = 1.0 / (0.225 + 0.00322 * fs - 0.625 * math.log10(pt))
+    # published fit of Fig 4: kt = 1/(0.225 + 0.00322 fs - 0.625 log10(bd/100Ast))
+    # and bd/(100 Ast) = 1/pt, so the pt term enters with a POSITIVE log10(pt).
+    kt = 1.0 / (0.225 + 0.00322 * fs + 0.625 * math.log10(pt))
     return min(max(kt, 0.4), 2.0)
 
 

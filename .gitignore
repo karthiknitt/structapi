@@ -13,6 +13,10 @@ __pycache__/
 dist/
 *.tsbuildinfo
 
+# generated: iscodes synced into sandbox workspaces by scripts/sync-workspace.mjs
+agent/sandbox/workspace/iscodes/
+agent/subagents/*/sandbox/workspace/iscodes/
+
 # eve
 .eve/
 .vercel/
