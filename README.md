@@ -20,6 +20,16 @@ app/                    Next.js web UI (chat + inline PNG artifacts)
 outputs/                PNGs exported from sandboxes land here per session
 ```
 
+## Where data lives
+| Data | Location |
+|---|---|
+| Agent definitions, skills, tools | `agent/**` (code, in git) |
+| Conversations, durable runs, queues | Postgres container (`workflow` schema), volume `structagent-pgdata` |
+| Users, sessions, OAuth accounts | Same Postgres (BetterAuth tables) |
+| Sandbox scratch (`/workspace`) | Ephemeral per-session Docker containers — gone when reaped |
+| Exported artifacts (PNG/PDF reports) | `outputs/<sessionId>/` on the host (gitignored), served at `/outputs/*` (auth required) |
+| Model selection | `config/models.json` (written by /settings) |
+
 ## Auth
 The web UI is gated by **BetterAuth with Google OAuth** — `/`, `/eve/*`
 (agent sessions) and `/outputs/*` (exported PNGs) all require a signed-in

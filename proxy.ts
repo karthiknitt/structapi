@@ -1,11 +1,12 @@
 import { getSessionCookie } from "better-auth/cookies";
 import { NextRequest, NextResponse } from "next/server";
 
-// Optimistic auth gate (cookie presence only — edge-safe, no DB call).
-// Real session validation happens server-side in the protected route
-// handlers (see app/outputs/[...path]/route.ts). Protects the chat UI,
-// exported artifacts, and the eve session proxy.
-export function middleware(request: NextRequest) {
+// Next.js 16 proxy (formerly middleware.ts): optimistic auth gate (cookie
+// presence only — edge-safe, no DB call). Real session validation happens
+// server-side in the protected route handlers (see
+// app/outputs/[...path]/route.ts). Protects the chat UI, exported
+// artifacts, the model settings API, and the eve session proxy.
+export function proxy(request: NextRequest) {
   const cookie = getSessionCookie(request);
   if (!cookie) {
     const url = new URL("/signin", request.url);
