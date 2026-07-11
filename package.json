@@ -1,0 +1,37 @@
+{
+  "name": "structagent",
+  "version": "0.0.0",
+  "type": "module",
+  "imports": {
+    "#*": "./agent/*",
+    "#evals/*": "./evals/*"
+  },
+  "scripts": {
+    "dev": "eve dev --no-ui --host 0.0.0.0",
+    "tui": "eve dev",
+    "build": "eve build",
+    "start": "eve start",
+    "info": "eve info",
+    "typecheck": "tsc",
+    "db:up": "docker compose up -d postgres",
+    "db:migrate": "workflow-postgres-setup",
+    "observe": "workflow inspect runs --backend @workflow/world-postgres",
+    "session": "curl -s -X POST http://localhost:2000/eve/v1/session -H \"Content-Type: application/json\" -d \"{\\\"message\\\": \\\"Design an RCC simply supported beam: span 6 m, live load 15 kN/m, M25 concrete, Fe500 steel, per IS 456:2000.\\\"}\""
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "3.0.74",
+    "@vercel/connect": "0.2.2",
+    "@workflow/world-postgres": "5.0.0-beta.19",
+    "ai": "7.0.0-beta.178",
+    "eve": "0.15.0",
+    "workflow": "4.5.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.x",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

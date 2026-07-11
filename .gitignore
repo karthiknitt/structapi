@@ -12,3 +12,10 @@ __pycache__/
 .venv/
 dist/
 *.tsbuildinfo
+
+# eve
+.eve/
+.vercel/
+.workflow-data/
+.nitro/
+.DS_Store
