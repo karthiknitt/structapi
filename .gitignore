@@ -1,0 +1,14 @@
+node_modules/
+.eve/
+.output/
+.next/
+logs/
+outputs/
+.env
+.env.local
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+dist/
+*.tsbuildinfo
