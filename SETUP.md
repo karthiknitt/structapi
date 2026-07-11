@@ -1,34 +1,56 @@
 # StructAgent — new machine setup (Windows + WSL2 + Docker Desktop)
 
-Complete runbook to go from `git clone` to a working authenticated app.
-Prereqs on the target machine: Docker Desktop (WSL2 backend, running),
-Node.js 24+, Git. Everything else is set up below.
+Complete runbook to go from a fresh machine to a working authenticated app.
 
-## 1. Clone + install
+## 0. Prerequisites (install these first)
+1. **Docker Desktop** — docker.com/products/docker-desktop, WSL2 backend
+   (the installer enables WSL2 for you; may need a reboot). After install,
+   **start Docker Desktop and leave it running** (whale icon steady).
+   Verify: `docker run hello-world` in a terminal.
+2. **Node.js 24+** — nodejs.org (LTS/Current ≥ 24). Verify: `node --version`.
+3. **Git** (includes Git Bash — use Git Bash for every command in this
+   guide) — git-scm.com. Verify: `git --version`.
+4. **Python 3.11+** — python.org (tick "Add python.exe to PATH" in the
+   installer) or `winget install Python.Python.3.12`. Only needed to run the
+   engineering test suite on the host; the agents use Python inside Docker.
+
+## 1. Get the code + install
+Either clone:
 ```bash
 git clone <this-repo> structagent && cd structagent
+```
+…or **copy the project folder** from the other machine. If copying, you can
+skip these generated folders (they are recreated): `node_modules/`, `.next/`,
+`.output/`, `.eve/`, `outputs/`, `logs/`, `__pycache__/`. Do copy the hidden
+`.git/` folder if you want the history. Then:
+```bash
+cd structagent
 corepack enable && corepack prepare pnpm@latest --activate
 pnpm install
 ```
 
-Python (for running the test suite on the host — optional but recommended):
+Host test suite (optional but recommended — proves the engineering core):
 ```bash
-python -m pip install numpy matplotlib pytest
-pnpm test:py        # expect: 60 passed
+python -m pip install -r python/requirements.txt
+pnpm test:py        # expect: 63 passed
 ```
 
 ## 2. Environment
 ```bash
 cp .env.example .env
 ```
-Fill in:
-- `OPENROUTER_API_KEY` — from openrouter.ai/keys.
-- `BETTER_AUTH_SECRET` — `openssl rand -base64 32` (Git Bash) or
-  `npx @better-auth/cli secret`.
-- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — see step 3.
-- Leave `WORKFLOW_*` and `BETTER_AUTH_URL` at defaults for local use.
+Open `.env` in any editor and fill in:
+- `OPENROUTER_API_KEY` — create one at openrouter.ai/keys (needs an
+  OpenRouter account with credits).
+- `BETTER_AUTH_SECRET` — any long random string; generate with
+  `openssl rand -base64 32` (works in Git Bash).
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — see step 3, **or leave blank
+  and sign in with the seeded email/password users instead** (Google button
+  will just error if clicked).
+- Leave `WORKFLOW_*` and `BETTER_AUTH_URL` at their defaults for local use.
 
-## 3. Google OAuth client (one-time, console.cloud.google.com)
+## 3. Google OAuth client (OPTIONAL — skip if using email/password only)
+One-time, at console.cloud.google.com:
 1. Create/select a project → *APIs & Services → Credentials → Create
    Credentials → OAuth client ID → Web application*.
 2. Authorized JavaScript origin: `http://localhost:3001`
@@ -69,7 +91,9 @@ pnpm dev            # or `pnpm tui` for the interactive terminal UI
 # Terminal 2 — the authenticated web UI (port 3001)
 pnpm web
 ```
-Open http://localhost:3001 → redirected to /signin → Google → chat.
+Open http://localhost:3001 → redirected to /signin → sign in with a seeded
+test user (table in step 4) or Google → chat. Keep BOTH terminals running;
+the web UI proxies agent traffic to the host on port 2000.
 
 Everything under `/`, `/eve/*` (agent sessions), and `/outputs/*` (exported
 PNGs) requires a signed-in session. The eve host on port 2000 itself is
@@ -100,6 +124,18 @@ host** (`pnpm dev` / `pnpm tui`) to apply. Precedence: config/models.json →
 5. `pnpm observe` — inspect durable runs.
 
 ## Troubleshooting
+- **`docker: command not found` / `error during connect`** → Docker Desktop
+  isn't installed or isn't running. Start it and wait for the whale icon.
+- **`pnpm: command not found`** → rerun `corepack enable && corepack prepare
+  pnpm@latest --activate` in a fresh terminal.
+- **`seed:users` fails with "Cannot find module" or env errors** → run it from
+  the project root; it needs `.env` to exist (the script runs with
+  `node --env-file=.env`).
+- **`auth:migrate` cannot parse config** → fallback:
+  `npx @better-auth/cli@latest generate --config lib/auth.ts` then apply the
+  emitted SQL with `docker exec -i structagent-postgres psql -U world -d world`.
+- **Google sign-in 403 (access_denied)** → your account isn't listed as a
+  test user on the OAuth consent screen (External/Testing mode).
 - **400 "Unhandled queue"** → `WORKFLOW_QUEUE_NAMESPACE` must be exactly `eve`.
 - **Runs break mid-flight after a dependency change** → `@workflow/world-postgres`
   must stay pinned to `5.0.0-beta.19` (matches eve 0.15.0's workflow core).

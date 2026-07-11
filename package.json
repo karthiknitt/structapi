@@ -16,7 +16,7 @@
     "db:up": "docker compose up -d postgres",
     "db:migrate": "workflow-postgres-setup",
     "auth:migrate": "npx @better-auth/cli@latest migrate --config lib/auth.ts -y",
-    "seed:users": "node scripts/seed-users.ts",
+    "seed:users": "node --env-file=.env scripts/seed-users.ts",
     "sync": "node scripts/sync-workspace.mjs",
     "sandbox:build": "docker build -t structagent-sandbox:latest sandbox-image/",
     "test:py": "cd python && python -m pytest tests/ -q",
