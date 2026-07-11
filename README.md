@@ -20,6 +20,13 @@ app/                    Next.js web UI (chat + inline PNG artifacts)
 outputs/                PNGs exported from sandboxes land here per session
 ```
 
+## Auth
+The web UI is gated by **BetterAuth with Google OAuth** — `/`, `/eve/*`
+(agent sessions) and `/outputs/*` (exported PNGs) all require a signed-in
+session. Auth tables live in the same Postgres container as the workflow
+world. See **[SETUP.md](SETUP.md)** for the complete new-machine runbook
+(Google OAuth client, migrations, sandbox image, smoke tests).
+
 ## Running (Docker-independent parts)
 ```bash
 pnpm install

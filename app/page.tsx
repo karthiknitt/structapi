@@ -2,12 +2,14 @@
 
 import { useEffect, useRef } from "react";
 import { useEveAgent } from "eve/react";
+import { signOut, useSession } from "../lib/auth-client";
 import { ChatInput } from "./_components/ChatInput";
 import { MessageBubble } from "./_components/MessageBubble";
 import { StatusDot } from "./_components/StatusDot";
 
 export default function Page() {
   const agent = useEveAgent();
+  const { data: session } = useSession();
   const scrollRef = useRef<HTMLDivElement>(null);
   const messages = agent.data?.messages ?? [];
 
@@ -23,7 +25,34 @@ export default function Page() {
         <div className="chat-title">
           StructAgent <span className="dim">— IS-code structural design</span>
         </div>
-        <StatusDot status={agent.status} />
+        <div style={{ display: "flex", alignItems: "center", gap: "0.9rem" }}>
+          {session?.user ? (
+            <>
+              <span className="dim" style={{ fontSize: "0.85rem" }}>
+                {session.user.email}
+              </span>
+              <button
+                onClick={() => {
+                  void signOut().then(() => {
+                    window.location.href = "/signin";
+                  });
+                }}
+                style={{
+                  padding: "0.3rem 0.7rem",
+                  borderRadius: 6,
+                  border: "1px solid #2d3543",
+                  background: "transparent",
+                  color: "#9aa4b2",
+                  fontSize: "0.8rem",
+                  cursor: "pointer",
+                }}
+              >
+                Sign out
+              </button>
+            </>
+          ) : null}
+          <StatusDot status={agent.status} />
+        </div>
       </header>
 
       <div className="chat-scroll" ref={scrollRef}>
