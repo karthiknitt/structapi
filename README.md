@@ -107,7 +107,7 @@ Web UI gated by **BetterAuth** — email/password (no verification; `pnpm seed:u
 
 **Operational**
 - **Beta-version tower**: eve 0.15.0 + `@workflow/world-postgres` 5.0.0-beta.19 + ai 7 beta + Next 16. Do not float versions; the pins are deliberate (`WORKFLOW_QUEUE_NAMESPACE=eve` and the world-postgres pin are hard runtime requirements).
-- **Vendored-copy drift**: Cloud Run deploys build from `planforge/structapi-service/` (WIF is repo-locked), vendored at v0.1.0. Changes here don't deploy until re-vendored — procedure in VENDORED.md. Consider a CI check comparing vendored tag vs latest release.
+- **Vendored-copy drift** (mitigated): Cloud Run deploys build from `planforge/structapi-service/` (WIF is repo-locked), vendored at v0.1.0 — procedure in `VENDORED.md`. Planforge's `verify-structapi-vendor.yml` now byte-diffs the vendored copy against the pinned tag on every push/PR (fails CI on drift) plus a weekly freshness issue if a newer structapi tag exists. Requires the one-time `STRUCTAPI_SYNC_TOKEN` secret (fine-grained PAT, contents:read on structapi) — until set, the check soft-skips with a warning.
 - **Rate-limit state is per-instance** (in-process token bucket). With Cloud Run autoscaling the effective limit multiplies by instance count.
 - **Cold starts**: structapi runs `min-instances=0`; first call after idle adds ~5-10 s. Bump to 1 if users notice.
 - **Open registration** on the StructAgent web UI (email/password, no verification): anyone who reaches port 3001 can register and consume OpenRouter credits. Gate registration before exposing beyond localhost/LAN. Never expose the eve host (port 2000, unauthenticated) beyond localhost.
