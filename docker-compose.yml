@@ -16,5 +16,16 @@ services:
       timeout: 3s
       retries: 10
 
+  structapi:
+    build:
+      context: .
+      dockerfile: structapi.Dockerfile
+    container_name: structapi
+    environment:
+      STRUCTAPI_KEYS: ${STRUCTAPI_KEYS:-}
+      STRUCTAPI_RATE_LIMIT: ${STRUCTAPI_RATE_LIMIT:-60}
+    ports:
+      - "8080:8080"
+
 volumes:
   structagent-pgdata:

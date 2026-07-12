@@ -30,6 +30,22 @@ outputs/                PNGs exported from sandboxes land here per session
 | Exported artifacts (PNG/PDF reports) | `outputs/<sessionId>/` on the host (gitignored), served at `/outputs/*` (auth required) |
 | Model selection | `config/models.json` (written by /settings) |
 
+## structapi — deterministic REST API (for PlanForge and other backends)
+`python/structapi/` is a FastAPI facade over `iscodes` for machine callers:
+JSON in → frozen v1 envelope out (`ok`, clause-referenced `checks`, `data`,
+base64 `artifacts` incl. SFD/BMD PNGs and PDF reports). `x-api-key` auth,
+per-key rate limiting, correlation IDs, OpenAPI at `/docs`.
+
+```bash
+pip install -r python/requirements-api.txt
+pnpm api:dev                  # uvicorn on :8080 (dev mode if STRUCTAPI_KEYS unset)
+curl -s localhost:8080/v1/health
+# containerized: pnpm api:build && pnpm api:up
+```
+Headline endpoint: `POST /v1/design/building` — column grid + storeys +
+location in, full structural design + BOQ quantities + consolidated PDF out.
+Architecture and integration plan: [docs/PLANFORGE-INTEGRATION.md](docs/PLANFORGE-INTEGRATION.md).
+
 ## Auth
 The web UI is gated by **BetterAuth with Google OAuth** — `/`, `/eve/*`
 (agent sessions) and `/outputs/*` (exported PNGs) all require a signed-in

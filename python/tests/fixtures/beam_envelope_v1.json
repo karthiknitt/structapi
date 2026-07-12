@@ -1,0 +1,48 @@
+{
+ "top_keys": [
+  "api_version",
+  "artifacts",
+  "checks",
+  "code_editions",
+  "data",
+  "disclaimer",
+  "ok"
+ ],
+ "check_names": [
+  "flexure Ast >= Ast_min (cl 26.5.1.1a)",
+  "flexure Ast <= Ast_max (cl 26.5.1.1b)",
+  "moment capacity >= Mu",
+  "shear (cl 40)",
+  "deflection L/d (cl 23.2.1)"
+ ],
+ "data_keys": [
+  "design",
+  "inputs",
+  "ok"
+ ],
+ "design_keys": [
+  "Asc_prov_mm2",
+  "Asc_reqd_mm2",
+  "Ast_max_mm2",
+  "Ast_min_mm2",
+  "Ast_prov_mm2",
+  "Ast_reqd_mm2",
+  "Mu_hogging_kNm",
+  "Mu_lim_kNm",
+  "Mu_max_kNm",
+  "Mu_sagging_kNm",
+  "Vu_max_kN",
+  "bar_dia",
+  "d_mm",
+  "deflection",
+  "doubly_reinforced",
+  "n_bars",
+  "n_bars_comp",
+  "pt_percent",
+  "side_face_steel_required",
+  "stirrups"
+ ],
+ "artifact_names": [
+  "sfd_bmd.png"
+ ]
+}

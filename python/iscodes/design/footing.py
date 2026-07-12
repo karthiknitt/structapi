@@ -229,9 +229,25 @@ def design_isolated_footing(P_service_kN: float, M_service_kNm: float,
     checks.append(("min steel 0.12% both directions (cl 34.5.1)", True))
 
     # ---- 6. development length (cl 34.2.4.3 / 26.2.1) ----
-    Ld = tables.development_length(bar_dia, fy, fck)
+    # A standard 90-degree bend contributes 8*phi of anchorage (cl 26.2.2.1).
+    # On compact footings even a bent bar of the requested diameter may not
+    # develop; standard practice is smaller bars at closer spacing — select
+    # the largest diameter (<= requested) that develops with a bend.
     avail = max(proj_x, proj_y) - cover
-    checks.append(("development length available (cl 26.2.1)", avail >= Ld))
+    sel_dia = bar_dia
+    for cand in sorted({bar_dia, 12.0, 10.0, 8.0}, reverse=True):
+        if cand > bar_dia:
+            continue
+        if avail + 8.0 * cand >= tables.development_length(cand, fy, fck):
+            sel_dia = cand
+            break
+    else:
+        sel_dia = 8.0
+    Ld = tables.development_length(sel_dia, fy, fck)
+    needs_bend = avail < Ld
+    checks.append(("development length (bar dia auto-selected, 90-deg bend "
+                   "credited; cl 26.2.1/26.2.2.1)",
+                   avail + 8.0 * sel_dia >= Ld))
 
     # ---- 7. bearing at column base (cl 34.4) ----
     A2 = col_b_mm * col_D_mm            # loaded (column) area
@@ -255,7 +271,12 @@ def design_isolated_footing(P_service_kN: float, M_service_kNm: float,
         "one_way_shear": {"tau_vx": result["tau_vx"], "tcx": result["tcx"],
                           "tau_vy": result["tau_vy"], "tcy": result["tcy"]},
         "Mx_kNm": result["Mx"] / 1e6, "My_kNm": result["My"] / 1e6,
-        "Ld_mm": Ld, "bearing_sigma_MPa": sigma_br, "bearing_limit_MPa": br_lim,
+        "Ld_mm": Ld, "Ld_available_mm": avail,
+        "main_bar_dia_max_mm": sel_dia,
+        "anchorage_note": ((f"use <= {sel_dia:.0f} mm dia bars with 90-deg "
+                            "end bends (cl 26.2.2.1)")
+                           if needs_bend else "straight bars develop fully"),
+        "bearing_sigma_MPa": sigma_br, "bearing_limit_MPa": br_lim,
         "dowels_note": None if sigma_br <= br_lim
         else "column bearing exceeds limit — provide dowels/starter bars (cl 34.4.3)",
     }
