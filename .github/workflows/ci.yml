@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python-tests:
+    name: iscodes + structapi tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: python/requirements-api.txt
+      - name: Install dependencies
+        run: pip install -r python/requirements-api.txt
+      - name: Run test suite (81 tests incl. contract-freeze golden)
+        run: python -m pytest tests/ -q
+        working-directory: python
+
+  docker-build:
+    name: structapi image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build structapi image
+        run: docker build -f structapi.Dockerfile -t structapi:ci .
+      - name: Smoke test /v1/health
+        run: |
+          docker run -d --rm -p 8080:8080 --name sapi structapi:ci
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8080/v1/health && ok=1 && break || sleep 1
+          done
+          docker stop sapi
+          test "$ok" = "1"
+
+  agent-build:
+    name: eve agent + web UI build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm exec eve build
+      - run: pnpm web:build
