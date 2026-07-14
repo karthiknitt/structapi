@@ -3,7 +3,7 @@ node_modules/
 .output/
 .next/
 logs/
-outputs/
+/outputs/
 .env
 .env.local
 __pycache__/

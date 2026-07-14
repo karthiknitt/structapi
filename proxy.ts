@@ -12,7 +12,7 @@ export function proxy(request: NextRequest) {
     const url = new URL("/signin", request.url);
     const p = request.nextUrl.pathname;
     if (p.startsWith("/eve") || p.startsWith("/outputs") ||
-        p.startsWith("/api/models")) {
+        p.startsWith("/api/models") || p.startsWith("/api/history")) {
       return new NextResponse("unauthorized", { status: 401 });
     }
     return NextResponse.redirect(url);
@@ -21,5 +21,13 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/settings", "/eve/:path*", "/outputs/:path*", "/api/models"],
+  matcher: [
+    "/",
+    "/settings",
+    "/history",
+    "/eve/:path*",
+    "/outputs/:path*",
+    "/api/models",
+    "/api/history/:path*",
+  ],
 };

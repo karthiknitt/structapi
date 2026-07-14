@@ -13,6 +13,7 @@
     "start": "eve start",
     "info": "eve info",
     "typecheck": "tsc",
+    "lint": "tsc -p tsconfig.next.json --noEmit",
     "db:up": "docker compose up -d postgres",
     "db:migrate": "workflow-postgres-setup",
     "auth:migrate": "npx @better-auth/cli@latest migrate --config lib/auth.ts -y",
@@ -53,5 +54,6 @@
   },
   "engines": {
     "node": ">=24"
-  }
+  },
+  "packageManager": "pnpm@11.13.0+sha512.88d94724d8f2e6c186744a5584c6e59ecac869ec7ba15e9cb4cd628e8dc7066820b2481d8ee3b51ea8da323a7378068aa58c556a3720d32b7c20a051d088363a"
 }
