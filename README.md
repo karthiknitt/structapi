@@ -3,9 +3,9 @@
 Two runnable products in one repo, sharing the **`iscodes`** IS-code engine:
 
 1. **StructAgent** — a multi-agent NL design app built on [Eve](https://eve.dev) (Vercel's durable agent framework), self-hosted per the [vercel-labs/steve](https://github.com/vercel-labs/steve) pattern: Postgres durability, Docker sandboxes with deny-all egress, TUI + authenticated web UI, models via OpenRouter.
-2. **structapi** — a deterministic FastAPI REST service over the same engine for backend callers (used by [PlanForge](https://github.com/karthiknitt/planforge); live on Cloud Run).
+2. **structapi** — a deterministic FastAPI REST service over the same engine for backend callers (used by [PlanForge](https://github.com/karthiknitt/planforge); live on Cloud Run). Current release: **v0.2.0** (envelope stays `api_version: "1"` — v0.2.0 is additive-only: `data.violations[]` + `data.grid_lines` on `/v1/design/building`).
 
-An **orchestrator** agent delegates to **8 specialist subagents** — `loads`, `beam`, `column`, `footing`, `slab`, `tank`, `sump`, `mixdesign` — each carrying a Limit State Method skill (clause-referenced procedure with runnable snippets) backed by the pure-Python `iscodes` library (numpy + matplotlib, 81 tests). Outputs: SFD/BMD PNGs (Indian convention — BMD on tension side, sagging positive), P-M interaction diagrams, pressure diagrams, clause-referenced PDF/markdown reports, and BOQ-shaped quantities.
+An **orchestrator** agent delegates to **8 specialist subagents** — `loads`, `beam`, `column`, `footing`, `slab`, `tank`, `sump`, `mixdesign` — each carrying a Limit State Method skill (clause-referenced procedure with runnable snippets) backed by the pure-Python `iscodes` library (numpy + matplotlib, 94 tests). Outputs: SFD/BMD PNGs (Indian convention — BMD on tension side, sagging positive), P-M interaction diagrams, pressure diagrams, clause-referenced PDF/markdown reports, and BOQ-shaped quantities.
 
 ## Codes implemented
 IS 456:2000 (LSM) · SP 16 · IS 875 Parts 1-3 (wind 2015) · IS 1893 Part 1:2016 · IS 13920:2016 · IS 3370 Parts 1-4 (2021) · IS 10262:2019 · IS 6403:1981

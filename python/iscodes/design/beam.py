@@ -94,13 +94,13 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
                                 pc=100.0 * Asc_prov / (b * d))
 
     # ---- checks -----------------------------------------------------------
+    Mu_capacity = (flexure.mu_capacity(Ast_prov, b, d, fck, fy)
+                   + (Asc_prov * (tables.fsc(fy, dc / d) - 0.446 * fck)
+                      * (d - dc) if doubly else 0.0))
     checks = []
     checks.append(("flexure Ast >= Ast_min (cl 26.5.1.1a)", Ast_prov >= Ast_min))
     checks.append(("flexure Ast <= Ast_max (cl 26.5.1.1b)", Ast_prov <= Ast_max))
-    checks.append(("moment capacity >= Mu",
-                   flexure.mu_capacity(Ast_prov, b, d, fck, fy)
-                   + (Asc_prov * (tables.fsc(fy, dc / d) - 0.446 * fck)
-                      * (d - dc) if doubly else 0.0) >= Mu * 0.999))
+    checks.append(("moment capacity >= Mu", Mu_capacity >= Mu * 0.999))
     checks.append(("shear (cl 40)", stirrups["ok"]))
     checks.append(("deflection L/d (cl 23.2.1)", defl["ok"]))
 

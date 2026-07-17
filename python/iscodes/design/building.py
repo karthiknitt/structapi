@@ -24,6 +24,7 @@ from dataclasses import asdict, is_dataclass
 
 from .. import loads as ld
 from .. import tables
+from . import flexure
 from .column import design_column
 from .footing import design_isolated_footing
 from .slab import design_one_way_slab, design_two_way_slab
@@ -42,6 +43,256 @@ def _panel_case(i: int, j: int, nx: int, ny: int) -> int:
     if edge_x or edge_y:
         return 2 if edge_y else 3  # one short/long edge discontinuous (approx)
     return 1  # interior
+
+
+def _column_kind(i: int, j: int, nx_bays: int, ny_bays: int) -> str:
+    """Column class from its grid-intersection position (i,j in grid-line
+    index space, 0..nx_bays / 0..ny_bays)."""
+    edge_x = i == 0 or i == nx_bays
+    edge_y = j == 0 or j == ny_bays
+    if edge_x and edge_y:
+        return "corner"
+    if edge_x or edge_y:
+        return "edge"
+    return "interior"
+
+
+# ---------------------------------------------------------------------------
+# violations[] — machine-readable failure -> solver-remedy mapping
+# (PlanForge closed-loop: v0.2.0, additive to the frozen v1 envelope)
+# ---------------------------------------------------------------------------
+
+_ALLOWED_REMEDIES = {"reduce_span", "increase_section", "add_grid_line",
+                     "increase_sbc", "increase_grade", "review_inputs"}
+
+
+def _violation(member_type: str, axis: str | None, grid_ref: str,
+              span_m: float | None, check: str, actual, limit, unit: str,
+              remedy_hint: str) -> dict:
+    assert remedy_hint in _ALLOWED_REMEDIES, remedy_hint
+    return {
+        "member_type": member_type, "axis": axis, "grid_ref": grid_ref,
+        "span_m": None if span_m is None else float(span_m),
+        "check": check,
+        "actual": None if actual is None else float(actual),
+        "limit": None if limit is None else float(limit),
+        "unit": unit, "remedy_hint": remedy_hint,
+    }
+
+
+def _beam_moment_capacity_kNm(bm: dict) -> float:
+    """Recompute the moment capacity used by design_beam's "moment capacity
+    >= Mu" check (cl 26.5.1.1 / doubly-reinforced sum). Not stored on the
+    public design_beam() summary (would change the frozen /v1/calc/beam
+    contract), so building.py recomputes it from already-known design
+    values — no string-parsing of check names involved."""
+    inp, d = bm["inputs"], bm["design"]
+    b, D, fck, fy = inp["b"], inp["D"], inp["fck"], inp["fy"]
+    dd = d["d_mm"]
+    dc = inp["cover"] + inp["stirrup_dia"] + inp["bar_dia"] / 2.0
+    cap = flexure.mu_capacity(d["Ast_prov_mm2"], b, dd, fck, fy)
+    if d["doubly_reinforced"]:
+        cap += (d["Asc_prov_mm2"] * (tables.fsc(fy, dc / dd) - 0.446 * fck)
+               * (dd - dc))
+    return cap / 1e6
+
+
+def _beam_violations(key: tuple, bm: dict) -> list:
+    direction, span, _tw = key
+    d = bm["design"]
+    grid_ref = (f"beam line axis={direction}, "
+               f"grid indices={bm.get('grid_line_indices', [])}, "
+               f"span {span:.2f} m")
+    out = []
+    for name, ok in bm["checks"]:
+        if ok:
+            continue
+        if name.startswith("flexure Ast >= Ast_min"):
+            out.append(_violation("beam", direction, grid_ref, span, name,
+                                  d["Ast_prov_mm2"], d["Ast_min_mm2"], "mm2",
+                                  "review_inputs"))
+        elif name.startswith("flexure Ast <= Ast_max"):
+            out.append(_violation("beam", direction, grid_ref, span, name,
+                                  d["Ast_prov_mm2"], d["Ast_max_mm2"], "mm2",
+                                  "reduce_span"))
+        elif name.startswith("moment capacity >= Mu"):
+            out.append(_violation("beam", direction, grid_ref, span, name,
+                                  d["Mu_max_kNm"], _beam_moment_capacity_kNm(bm),
+                                  "kNm", "add_grid_line"))
+        elif name.startswith("shear (cl 40)"):
+            st = d["stirrups"]
+            out.append(_violation("beam", direction, grid_ref, span, name,
+                                  st.get("tau_v"), st.get("tau_c_max"), "MPa",
+                                  "add_grid_line"))
+        elif name.startswith("deflection L/d"):
+            df = d["deflection"]
+            out.append(_violation("beam", direction, grid_ref, span, name,
+                                  df.get("actual_L_by_d"),
+                                  df.get("allowable_L_by_d"), "ratio",
+                                  "reduce_span"))
+        elif name.startswith("IS 13920 min width"):
+            out.append(_violation("beam", direction, grid_ref, span, name,
+                                  bm["b_mm"], tables.DUCTILE["beam_min_b"],
+                                  "mm", "increase_section"))
+        elif name.startswith("IS 13920 pt"):
+            out.append(_violation("beam", direction, grid_ref, span, name,
+                                  d["pt_percent"] / 100.0,
+                                  tables.DUCTILE["beam_max_pt"], "ratio",
+                                  "add_grid_line"))
+        else:
+            out.append(_violation("beam", direction, grid_ref, span, name,
+                                  None, None, "", "review_inputs"))
+    return out
+
+
+def _column_violations(kind: str, col: dict) -> list:
+    grid_ref = f"column class {kind}"
+    data = col["data"]
+    out = []
+    for name, ok in col["checks"]:
+        if ok:
+            continue
+        if name.startswith("min steel 0.8%"):
+            out.append(_violation("column", None, grid_ref, None, name,
+                                  data.get("p_percent"), 0.8, "%",
+                                  "increase_section"))
+        elif name.startswith("max steel 6%"):
+            out.append(_violation("column", None, grid_ref, None, name,
+                                  data.get("p_percent"), 6.0, "%",
+                                  "increase_section"))
+        elif name.startswith("min 4 bars"):
+            out.append(_violation("column", None, grid_ref, None, name,
+                                  col.get("bar_dia"), 12.0, "mm",
+                                  "review_inputs"))
+        elif name.startswith("slenderness"):
+            actual = max(data.get("lex_by_D", 0.0), data.get("ley_by_b", 0.0))
+            out.append(_violation("column", None, grid_ref, None, name,
+                                  actual, 60.0, "ratio", "increase_section"))
+        elif name.startswith("biaxial interaction"):
+            out.append(_violation("column", None, grid_ref, None, name,
+                                  data.get("interaction"), 1.0, "ratio",
+                                  "increase_section"))
+        elif name.startswith("tie dia"):
+            out.append(_violation("column", None, grid_ref, None, name,
+                                  data.get("tie_dia"), data.get("tie_dia_min"),
+                                  "mm", "review_inputs"))
+        elif name.startswith("min width 300"):
+            out.append(_violation("column", None, grid_ref, None, name,
+                                  min(col["b_mm"], col["D_mm"]),
+                                  tables.DUCTILE["column_min_b_storeys"], "mm",
+                                  "increase_section"))
+        else:
+            out.append(_violation("column", None, grid_ref, None, name,
+                                  None, None, "", "review_inputs"))
+    return out
+
+
+def _footing_violations(kind: str, foot: dict, sbc_kpa: float) -> list:
+    grid_ref = f"footing class {kind}"
+    data = foot.get("data", {})
+    out = []
+    for name, ok in foot["checks"]:
+        if ok:
+            continue
+        if name == "depth converged for shear":
+            out.append(_violation("footing", None, grid_ref, None, name,
+                                  None, None, "", "increase_sbc"))
+        elif name.startswith("service q_max"):
+            out.append(_violation("footing", None, grid_ref, None, name,
+                                  data.get("q_max_service_kPa"), sbc_kpa,
+                                  "kPa", "increase_sbc"))
+        elif name.startswith("service q_min"):
+            out.append(_violation("footing", None, grid_ref, None, name,
+                                  data.get("q_min_service_kPa"), 0.0, "kPa",
+                                  "review_inputs"))
+        elif name.startswith("two-way shear"):
+            tws = data.get("two_way_shear", {})
+            out.append(_violation("footing", None, grid_ref, None, name,
+                                  tws.get("tau_v"), tws.get("tau_lim"), "MPa",
+                                  "increase_section"))
+        elif name.startswith("one-way shear X"):
+            ows = data.get("one_way_shear", {})
+            out.append(_violation("footing", None, grid_ref, None, name,
+                                  ows.get("tau_vx"), ows.get("tcx"), "MPa",
+                                  "increase_section"))
+        elif name.startswith("one-way shear Y"):
+            ows = data.get("one_way_shear", {})
+            out.append(_violation("footing", None, grid_ref, None, name,
+                                  ows.get("tau_vy"), ows.get("tcy"), "MPa",
+                                  "increase_section"))
+        elif name.startswith("development length"):
+            avail = data.get("Ld_available_mm")
+            dia = data.get("main_bar_dia_max_mm")
+            actual = (avail + 8.0 * dia) if (avail is not None
+                                             and dia is not None) else None
+            out.append(_violation("footing", None, grid_ref, None, name,
+                                  actual, data.get("Ld_mm"), "mm",
+                                  "increase_section"))
+        elif name.startswith("bearing at column base"):
+            out.append(_violation("footing", None, grid_ref, None, name,
+                                  data.get("bearing_sigma_MPa"),
+                                  data.get("bearing_limit_MPa"), "MPa",
+                                  "increase_grade"))
+        else:
+            out.append(_violation("footing", None, grid_ref, None, name,
+                                  None, None, "", "review_inputs"))
+    return out
+
+
+def _slab_violations(p: dict) -> list:
+    grid_ref = (f"slab panel {p['type']} lx={p['lx_m']:.2f}m "
+               f"ly={p['ly_m']:.2f}m case={p['case_']}")
+    d_x = p.get("d_mm") if p["type"] == "one-way" else p.get("d_x_mm")
+    d_y = p.get("d_y_mm")
+    out = []
+    for name, ok in p["checks"]:
+        if ok:
+            continue
+        if "Ast >= max(flexure" in name:
+            tag = name.split(":")[0]
+            strip = p.get("main") if tag == "main" else (p.get("strips") or {}).get(tag, {})
+            out.append(_violation("slab", None, grid_ref, p["lx_m"], name,
+                                  strip.get("Ast_prov"), strip.get("Ast_req"),
+                                  "mm2/m", "add_grid_line"))
+        elif "depth adequate for flexure" in name:
+            out.append(_violation("slab", None, grid_ref, p["lx_m"], name,
+                                  None, None, "", "add_grid_line"))
+        elif "spacing <=" in name:
+            tag = name.split(":")[0]
+            strip = p.get("main") if tag == "main" else (p.get("strips") or {}).get(tag, {})
+            d_eff = d_y if "long_y" in tag else d_x
+            cap = min(3 * d_eff, 300.0) if d_eff else None
+            out.append(_violation("slab", None, grid_ref, p["lx_m"], name,
+                                  strip.get("spacing"), cap, "mm",
+                                  "review_inputs"))
+        elif name.startswith("shear tau_v"):
+            out.append(_violation("slab", None, grid_ref, p["lx_m"], name,
+                                  p.get("tau_v"), p.get("tau_allow"), "MPa",
+                                  "add_grid_line"))
+        elif name.startswith("deflection L/d"):
+            defl = p.get("deflection", {})
+            out.append(_violation("slab", None, grid_ref, p["lx_m"], name,
+                                  defl.get("actual_L_by_d"),
+                                  defl.get("allowable_L_by_d"), "ratio",
+                                  "reduce_span"))
+        else:
+            out.append(_violation("slab", None, grid_ref, p["lx_m"], name,
+                                  None, None, "", "review_inputs"))
+    return out
+
+
+def _collect_violations(panels: dict, beams: dict, columns: dict,
+                        footings: dict, sbc_kpa: float) -> list:
+    violations = []
+    for p in panels.values():
+        violations += _slab_violations(p)
+    for key, bm in beams.items():
+        violations += _beam_violations(key, bm)
+    for kind, col in columns.items():
+        violations += _column_violations(kind, col)
+    for kind, foot in footings.items():
+        violations += _footing_violations(kind, foot, sbc_kpa)
+    return violations
 
 
 def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
@@ -97,6 +348,12 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
             r["lx_m"], r["ly_m"], r["case_"] = lx, ly, case
             panels[key] = r
 
+    panel_indices = {}
+    for (i, j), key in panel_map.items():
+        panel_indices.setdefault(key, []).append([i, j])
+    for key, p in panels.items():
+        p["panel_indices"] = panel_indices[key]
+
     slab_D = max(p["D_mm"] for p in panels.values())
     slab_dl = slab_D / 1000.0 * tables.UNIT_WEIGHTS["rcc"] + finish_kn_m2
     w_floor_service = slab_dl + il                       # kN/m2
@@ -120,6 +377,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
             n_spans_total = len(spans)
             if key in beams:
                 beams[key]["count"] += 1
+                beams[key]["grid_line_indices"].append(line)
                 beam_len_total += sum(spans)
                 continue
             w_dl = slab_dl * tw + wall_kn_m
@@ -136,6 +394,9 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
             r["b_mm"], r["D_mm"] = b, D
             r["span_m"], r["trib_width_m"] = span, tw
             r["count"], r["n_spans"] = 1, n_spans_total
+            r["axis"] = direction
+            r["grid_line_indices"] = [line]
+            r["span_indices"] = list(range(n_spans_total))
             r.pop("analysis", None)                 # arrays not JSON-safe
             beams[key] = r
             beam_len_total += sum(spans)
@@ -169,6 +430,11 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     storey_shear_unit = V_lateral / shares
     col_h_mm = storey_height_m * 1000
 
+    intersections = {"interior": [], "edge": [], "corner": []}
+    for i in range(nx_bays + 1):
+        for j in range(ny_bays + 1):
+            intersections[_column_kind(i, j, nx_bays, ny_bays)].append([i, j])
+
     columns = {}
     for kind, at in trib.items():
         if counts[kind] == 0:
@@ -197,7 +463,8 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                          "b_mm": b, "D_mm": D, "bars": f"{nb}-{dia} dia",
                          "n_bars": nb, "bar_dia": dia,
                          "Pu_kN": Pu, "P_service_kN": P_service,
-                         "M_lateral_kNm": M_lat, "count": counts[kind]}
+                         "M_lateral_kNm": M_lat, "count": counts[kind],
+                         "grid_intersections": intersections[kind]}
 
     # ---------------- footings ----------------
     footings = {}
@@ -209,6 +476,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
             fck=fck, fy=fy)
         fd = asdict(f) if is_dataclass(f) else f
         fd["count"] = col["count"]
+        fd["grid_intersections"] = col["grid_intersections"]
         footings[kind] = fd
 
     # ---------------- quantities (BOQ-shaped) ----------------
@@ -257,6 +525,19 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                      and all(c["ok"] for c in columns.values())
                      and all(f["ok"] for f in footings.values()))
 
+    # ---------------- grid geometry (cumulative, from 0.0) ----------------
+    x_coords_m, cx = [0.0], 0.0
+    for s in x_spacings_m:
+        cx += s
+        x_coords_m.append(round(cx, 4))
+    y_coords_m, cy = [0.0], 0.0
+    for s in y_spacings_m:
+        cy += s
+        y_coords_m.append(round(cy, 4))
+    grid_lines = {"x_coords_m": x_coords_m, "y_coords_m": y_coords_m}
+
+    violations = _collect_violations(panels, beams, columns, footings, sbc_kpa)
+
     return {
         "ok": all_checks_ok,
         "inputs": {"grid_x_m": x_spacings_m, "grid_y_m": y_spacings_m,
@@ -278,6 +559,8 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         "footings": footings,
         "quantities": quantities,
         "assumptions": assumptions,
+        "grid_lines": grid_lines,
+        "violations": violations,
     }
 
 

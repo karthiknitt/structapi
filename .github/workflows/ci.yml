@@ -18,7 +18,7 @@ jobs:
           cache-dependency-path: python/requirements-api.txt
       - name: Install dependencies
         run: pip install -r python/requirements-api.txt
-      - name: Run test suite (81 tests incl. contract-freeze golden)
+      - name: Run test suite (94 tests incl. contract-freeze golden)
         run: python -m pytest tests/ -q
         working-directory: python
 
@@ -43,9 +43,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # No explicit version: package.json's packageManager field is the
+      # single source of truth (an explicit version here conflicts with it:
+      # "Multiple versions of pnpm specified" — broke CI on main).
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 24
