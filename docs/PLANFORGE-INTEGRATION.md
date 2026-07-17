@@ -11,7 +11,7 @@ exports; Razorpay; agentic Claude chat via Vercel AI SDK).
 
 **StructAgent** (this repo) designs RCC structures per Indian Standards:
 the deterministic `python/iscodes` library (IS 456/875/1893/13920/3370/10262,
-63 tests) + an Eve multi-agent NL layer + a small authenticated web UI.
+94 tests) + an Eve multi-agent NL layer + a small authenticated web UI.
 
 **Goal:** PlanForge users go from *floor plan* → *structural design* (framing,
 member sizing, foundations, BOQ steel/concrete quantities, approval-ready
@@ -118,6 +118,82 @@ the PlanForge side (they own plan semantics); structapi owns everything after
 the grid exists. Output: per-element results (slab panels, beams by tributary
 width, columns by tributary area + frame moments, isolated footings), steel +
 concrete quantity summary (BOQ-ready), one consolidated PDF, all drawings.
+
+### `/v1/design/building` output additions (v0.2.0 — additive to v1)
+
+Two fields were added to `data` for PlanForge's closed design loop (design →
+fails → map failure to a solver constraint → re-solve → re-design). Both are
+additive; every other `data` field is unchanged, and `api_version` stays
+`"1"`.
+
+**`data.violations[]`** — always present (`[]` when `ok: true`, never absent).
+One entry per FAILING check remaining in the returned design (a member that
+passed after the chain's own section-size iteration produces no entry):
+
+```json
+{
+  "member_type": "beam",
+  "axis": "y",
+  "grid_ref": "beam line axis=y, grid indices=[1], span 12.00 m",
+  "span_m": 12.0,
+  "check": "shear (cl 40)",
+  "actual": 4.525521,
+  "limit": 2.8,
+  "unit": "MPa",
+  "remedy_hint": "add_grid_line"
+}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `member_type` | `"beam"\|"column"\|"slab"\|"footing"` | which chain stage failed |
+| `axis` | `"x"\|"y"\|null` | grid axis the member spans (beams only; `null` for columns/slabs/footings) |
+| `grid_ref` | string | human-readable locator — grid-line indices for beams, panel description for slabs, column/footing class otherwise |
+| `span_m` | float\|null | governing span (beams/slabs); `null` for columns/footings |
+| `check` | string | the exact clause-referenced check name from `checks[]` (same string, not re-derived) |
+| `actual` / `limit` | float\|null | the real computed values behind the check (utilisation vs allowable, stress vs limit, etc.) — sourced from the design function's own internals, never parsed out of `check`. `null` only when the underlying value is non-finite (e.g. an unbounded biaxial interaction ratio) or the chain hit a hard sentinel failure (footing depth never converged) |
+| `unit` | string | unit of `actual`/`limit` (`"MPa"`, `"mm"`, `"mm2"`, `"kNm"`, `"%"`, `"ratio"`, `"kPa"`, or `""` when not applicable) |
+| `remedy_hint` | enum | see below |
+
+`remedy_hint` — one of `reduce_span`, `increase_section`, `add_grid_line`,
+`increase_sbc`, `increase_grade`, `review_inputs`:
+
+| Failure pattern | `remedy_hint` |
+|---|---|
+| Beam moment/shear/ductile-pt failing after the chain's own D-iteration maxed out (span too long for any section it tried) | `add_grid_line` |
+| Beam over-reinforced (`Ast > Ast_max`) or deflection L/d exceeded | `reduce_span` |
+| Beam IS 13920 min-width failure | `increase_section` |
+| Column steel %, slenderness, biaxial interaction, IS 13920 min-width failing after the chain's own dia/section iteration maxed out | `increase_section` |
+| Column bar-count/dia or tie-dia detailing shortfall | `review_inputs` |
+| Slab flexure/shear failing after the chain's own depth-iteration maxed out | `add_grid_line` |
+| Slab deflection L/d exceeded | `reduce_span` |
+| Slab bar-spacing detailing shortfall | `review_inputs` |
+| Footing bearing pressure > SBC, or depth never converged for shear | `increase_sbc` |
+| Footing two-way/one-way shear or development length failing at max depth | `increase_section` |
+| Footing column-base bearing stress exceeded | `increase_grade` |
+| Footing net uplift (`q_min < 0`) | `review_inputs` |
+| Anything not mapped above | `review_inputs` |
+
+**`data.grid_lines`** — cumulative grid-line coordinates (m), starting at
+0.0, derived from the input spacings:
+
+```json
+{"x_coords_m": [0.0, 3.5, 7.5, 11.0], "y_coords_m": [0.0, 4.0, 8.5]}
+```
+
+Every sized member also carries enough positional reference to place it on
+this grid without re-deriving geometry from spacings:
+- **Beams** (`data.beams[*]`): `axis` (`"x"`/`"y"`), `grid_line_indices`
+  (perpendicular grid-line indices this beam design applies to — beams are
+  deduplicated by span/tributary-width, so one entry can cover several
+  physical lines), `span_indices` (bay positions along each such line).
+- **Columns** (`data.columns[*]`): `grid_intersections` — list of
+  `[x_index, y_index]` grid-line intersections belonging to that class
+  (`corner`/`edge`/`interior`), alongside the existing `count`.
+- **Footings** (`data.footings[*]`): inherit the same `grid_intersections`
+  as their parent column class (one footing per column).
+- **Slabs** (`data.slabs[*]`): `panel_indices` — list of `[i, j]` grid-cell
+  indices sharing that panel design.
 
 ## 4. Implementation phases
 

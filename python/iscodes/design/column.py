@@ -234,7 +234,7 @@ def design_column(b: float, D: float, fck: float, fy: float,
     # ties, cl 26.5.3.2(c)
     tie_min = max(bar_dia / 4, 6.0)
     pitch_max = min(min(b, D), 16 * bar_dia, 300.0)
-    data.update(tie_dia_min=tie_min, tie_pitch_max=pitch_max)
+    data.update(tie_dia=tie_dia, tie_dia_min=tie_min, tie_pitch_max=pitch_max)
     checks.append(("tie dia >= max(db/4, 6) (cl 26.5.3.2c-1)", tie_dia >= tie_min))
 
     # IS 13920 overlay

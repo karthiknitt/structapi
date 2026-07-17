@@ -18,7 +18,7 @@ jobs:
           cache-dependency-path: python/requirements-api.txt
       - name: Install dependencies
         run: pip install -r python/requirements-api.txt
-      - name: Run test suite (81 tests incl. contract-freeze golden)
+      - name: Run test suite (94 tests incl. contract-freeze golden)
         run: python -m pytest tests/ -q
         working-directory: python
 
