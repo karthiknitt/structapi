@@ -13,8 +13,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
-from reportlab.platypus import (Image, Paragraph, SimpleDocTemplate, Spacer,
-                                Table, TableStyle)
+from reportlab.platypus import (Image, PageBreak, Paragraph,
+                                SimpleDocTemplate, Spacer, Table, TableStyle)
 
 from . import DISCLAIMER, tables
 
@@ -34,6 +34,11 @@ _CAPTION = ParagraphStyle("Capx", parent=_BODY, fontSize=8.5,
                           spaceAfter=8)
 _FOOT = ParagraphStyle("Footx", parent=_BODY, fontSize=8,
                        textColor=colors.HexColor("#777777"))
+_TOC_H = ParagraphStyle("TOCHx", parent=_H2, spaceBefore=0)
+_TOC1 = ParagraphStyle("TOC1x", parent=_BODY, fontSize=10, spaceAfter=3,
+                       textColor=colors.HexColor("#1a5fb4"))
+_TOC2 = ParagraphStyle("TOC2x", parent=_TOC1, fontSize=9, leftIndent=10,
+                       textColor=colors.HexColor("#3a71b8"))
 
 
 class PdfReport:
@@ -52,9 +57,21 @@ class PdfReport:
         self.title = title
         self.code_refs = code_refs or []
         self._flow: list = [Paragraph(title, _H1), Spacer(1, 2 * mm)]
+        self._toc: list = []  # (level, text, anchor)
+
+    def _anchored_heading(self, heading: str, style, level: int) -> str:
+        anchor = f"toc{len(self._toc)}"
+        self._toc.append((level, heading, anchor))
+        self._flow.append(Paragraph(f'<a name="{anchor}"/>{heading}', style))
+        return anchor
 
     def add_section(self, heading: str) -> "PdfReport":
-        self._flow.append(Paragraph(heading, _H2))
+        self._anchored_heading(heading, _H2, 0)
+        return self
+
+    def add_subsection(self, heading: str) -> "PdfReport":
+        """Like add_line, but registers a level-1 entry in the TOC."""
+        self._anchored_heading(heading, _CHECK, 1)
         return self
 
     def add_line(self, text: str) -> "PdfReport":
@@ -105,7 +122,20 @@ class PdfReport:
         return self
 
     def save(self, path: str) -> str:
-        flow = list(self._flow)
+        # self._flow[0:2] are the title Paragraph + Spacer set up in
+        # __init__; the TOC (built last, once every anchor is known) is
+        # spliced in right after them so it appears on its own page up
+        # front, before section content begins.
+        flow = list(self._flow[:2])
+        if self._toc:
+            flow.append(Paragraph("Table of Contents", _TOC_H))
+            for level, text, anchor in self._toc:
+                style = _TOC1 if level == 0 else _TOC2
+                flow.append(Paragraph(
+                    f'<a href="#{anchor}" color="#1a5fb4">{text}</a>',
+                    style))
+            flow.append(PageBreak())
+        flow += self._flow[2:]
         if self.code_refs:
             flow.append(Paragraph("Code references", _H2))
             for ref in self.code_refs:

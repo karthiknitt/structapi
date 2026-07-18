@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import tempfile
 import time
 
 from fastapi import Depends, FastAPI, Request
@@ -231,25 +232,31 @@ def calc_mix(body: MixIn):
 
 @app.post("/v1/design/building", dependencies=[Depends(require_api_key)])
 def design_building_route(body: BuildingIn):
-    r = design_building(
-        x_spacings_m=body.grid.x_spacings_m,
-        y_spacings_m=body.grid.y_spacings_m,
-        storeys=body.storeys, storey_height_m=body.storey_height_m,
-        occupancy=body.occupancy,
-        city=body.location.city,
-        basic_wind_speed=body.location.basic_wind_speed,
-        seismic_zone=body.location.seismic_zone,
-        terrain_category=body.location.terrain_category,
-        soil=body.location.soil, sbc_kpa=body.sbc_kpa,
-        fck=body.materials.fck, fy=body.materials.fy,
-        exposure=body.materials.exposure,
-        seismic_detailing=body.options.seismic_detailing)
     arts = []
-    if body.options.pdf_report:
-        a = pdf_artifact("building_report.pdf",
-                         lambda p: building_report_pdf(r, p))
-        if a:
-            arts.append(a)
+    with tempfile.TemporaryDirectory() as figures_td:
+        r = design_building(
+            x_spacings_m=body.grid.x_spacings_m,
+            y_spacings_m=body.grid.y_spacings_m,
+            storeys=body.storeys, storey_height_m=body.storey_height_m,
+            occupancy=body.occupancy,
+            city=body.location.city,
+            basic_wind_speed=body.location.basic_wind_speed,
+            seismic_zone=body.location.seismic_zone,
+            terrain_category=body.location.terrain_category,
+            soil=body.location.soil, sbc_kpa=body.sbc_kpa,
+            fck=body.materials.fck, fy=body.materials.fy,
+            exposure=body.materials.exposure,
+            seismic_detailing=body.options.seismic_detailing,
+            figures_dir=figures_td if body.options.pdf_report else None)
+        # Figures are local file paths, valid only inside this `with` block —
+        # pop before the envelope is built so no dangling path leaks into the
+        # JSON response; the PDF embeds their bytes below, while still inside.
+        figs = r.pop("figures", {})
+        if body.options.pdf_report:
+            a = pdf_artifact("building_report.pdf",
+                             lambda p: building_report_pdf(r, p, figures=figs))
+            if a:
+                arts.append(a)
     all_checks = []
     for group in ("slabs", "beams", "columns", "footings"):
         for key, el in r[group].items():

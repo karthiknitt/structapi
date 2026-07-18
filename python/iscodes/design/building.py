@@ -20,18 +20,168 @@ Units: m, kN externally; mm/N internally per iscodes convention.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import asdict, is_dataclass
 
 from .. import loads as ld
 from .. import tables
 from . import flexure
-from .column import design_column
+from .column import ColumnSection, design_column, interaction_curve, rect_bar_layout
 from .footing import design_isolated_footing
 from .slab import design_one_way_slab, design_two_way_slab
 from .beam import design_beam
 
 STEEL_DENSITY = 7850.0  # kg/m3
 WASTE_FACTOR = 1.10
+
+
+def _render_beam_figure(r: dict, key: str, direction: str, span: float,
+                        tw: float, b: float, D: float, figures_dir: str,
+                        figures: dict) -> None:
+    """SFD/BMD PNG for one unique beam. Never raises — a plotting failure
+    must not take down the (already-computed) structural design."""
+    try:
+        from ..plotting import plot_sfd_bmd
+        x, V, M = r["analysis"]["x"], r["analysis"]["V"], r["analysis"]["M"]
+        fpath = os.path.join(
+            figures_dir, f"beam_{direction}_span{span:.2f}_trib{tw:.2f}.png")
+        plot_sfd_bmd(x, V, M,
+                     f"Beam {b:.0f}x{D:.0f} mm — {direction}-dir span "
+                     f"{span:.2f} m (trib {tw:.2f} m)", fpath)
+        figures[f"beams:{key}"] = (
+            fpath, f"SFD/BMD — {direction}-direction, span {span:.2f} m, "
+                   f"tributary width {tw:.2f} m")
+    except Exception:
+        pass
+
+
+def _render_column_figure(kind: str, b: float, D: float, fck: float, fy: float,
+                          nb: int, dia: float, r, Pu: float, count: int,
+                          figures_dir: str, figures: dict) -> None:
+    """P-M interaction PNG for one column kind (corner/edge/interior)."""
+    try:
+        from ..plotting import plot_pm_interaction
+        # cover=40.0, tie_dia=8.0 — design_column()'s own defaults, which the
+        # building chain never overrides, so the section drawn here matches
+        # the section actually designed.
+        cc = 40.0 + 8.0 + dia / 2.0
+        sec = ColumnSection(b, D, fck, fy, rect_bar_layout(b, D, cc, nb, dia))
+        curve = interaction_curve(sec) / 1e3
+        curve[:, 1] /= 1e3
+        fpath = os.path.join(figures_dir, f"column_{kind}_pm.png")
+        plot_pm_interaction(
+            curve, [(r.data.get("Mux_design_kNm", 0.0), Pu)],
+            f"Column ({kind}) {b:.0f}x{D:.0f} mm — P-M interaction", fpath)
+        figures[f"columns:{kind}"] = (
+            fpath, f"P-M interaction — {kind} columns ({count} nos.)")
+    except Exception:
+        pass
+
+
+def _render_footing_figure(kind: str, fd: dict, count: int,
+                           figures_dir: str, figures: dict) -> None:
+    """Base-pressure PNG for one footing kind. Skipped if the footing design
+    didn't converge (its data dict then lacks the pressure fields)."""
+    try:
+        from ..plotting import plot_pressure_diagram
+        d = fd["data"]
+        fpath = os.path.join(figures_dir, f"footing_{kind}_pressure.png")
+        plot_pressure_diagram(d["L_m"], d["q_min_service_kPa"],
+                              d["q_max_service_kPa"],
+                              f"Footing ({kind}) base pressure (service)", fpath)
+        figures[f"footings:{kind}"] = (
+            fpath, f"Base pressure (service) — {kind} footings ({count} nos.)")
+    except Exception:
+        pass
+
+
+def _beam_detail_rows(el: dict) -> list:
+    d = el.get("design", {})
+    rows = [
+        ["Section (b x D)", f"{el['b_mm']:.0f} x {el['D_mm']:.0f} mm"],
+        ["Span / tributary width",
+         f"{el['span_m']:.2f} m / {el['trib_width_m']:.2f} m"],
+        ["Bottom (tension) steel",
+         f"{d.get('n_bars', '-')}-{d.get('bar_dia', 0):.0f}φ "
+         f"({d.get('Ast_prov_mm2', 0):.0f} mm2 prov, "
+         f"{d.get('Ast_reqd_mm2', 0):.0f} mm2 reqd)"],
+    ]
+    if d.get("doubly_reinforced"):
+        rows.append(["Top (compression) steel",
+                     f"{d.get('n_bars_comp', '-')}-{d.get('bar_dia', 0):.0f}φ "
+                     f"({d.get('Asc_prov_mm2', 0):.0f} mm2 prov)"])
+    st = d.get("stirrups", {})
+    stirrup_dia = el.get("inputs", {}).get("stirrup_dia", 8)
+    rows.append(["Stirrups",
+                 f"2-legged {stirrup_dia:.0f} mm dia @ "
+                 f"{st.get('sv_provided', '-')} mm c/c ({st.get('governing', '-')})"])
+    defl = d.get("deflection", {})
+    rows.append(["Deflection L/d",
+                 f"{defl.get('actual_L_by_d', 0):.1f} <= "
+                 f"{defl.get('allowable_L_by_d', 0):.1f}"])
+    rows.append(["pt %", f"{d.get('pt_percent', 0):.2f}%"])
+    return rows
+
+
+def _column_detail_rows(el: dict) -> list:
+    d = el.get("data", {})
+    rows = [
+        ["Section (b x D)", f"{el['b_mm']:.0f} x {el['D_mm']:.0f} mm"],
+        ["Longitudinal steel", f"{el['bars']} ({d.get('p_percent', 0):.2f}%)"],
+        ["Ties", f"{d.get('tie_dia', '-')} mm dia @ "
+                 f"{d.get('tie_pitch_max', 0):.0f} mm c/c max"],
+        ["Design axial load Pu", f"{el.get('Pu_kN', 0):.0f} kN"],
+        ["Design moments (Mux / Muy)",
+         f"{d.get('Mux_design_kNm', 0):.1f} / {d.get('Muy_design_kNm', 0):.1f} kNm"],
+        ["Biaxial interaction ratio (cl 39.6)", f"{d.get('interaction', 0):.2f}"],
+        ["Slenderness (lex/D, ley/b)",
+         f"{d.get('lex_by_D', 0):.1f}, {d.get('ley_by_b', 0):.1f}"],
+    ]
+    return rows
+
+
+def _footing_detail_rows(el: dict) -> list:
+    d = el.get("data", {})
+    rows = [
+        ["Plan size (L x B)", f"{d.get('L_m', 0):.2f} x {d.get('B_m', 0):.2f} m"],
+        ["Overall depth", f"{d.get('D_overall_mm', 0):.0f} mm"],
+        ["Steel — long direction (x)", d.get("bars_x", "-")],
+        ["Steel — transverse (y)", d.get("bars_y", "-")],
+        ["Base pressure (service, min/max)",
+         f"{d.get('q_min_service_kPa', 0):.1f} / "
+         f"{d.get('q_max_service_kPa', 0):.1f} kPa"],
+        ["Anchorage", d.get("anchorage_note", "-")],
+    ]
+    if d.get("dowels_note"):
+        rows.append(["Note", d["dowels_note"]])
+    return rows
+
+
+def _slab_detail_rows(el: dict) -> list:
+    rows = [
+        ["Type", el.get("type", "-")],
+        ["Overall depth", f"{el.get('D_mm', 0):.0f} mm"],
+    ]
+    if el.get("type") == "one-way":
+        main, dist = el.get("main", {}), el.get("distribution", {})
+        rows.append(["Main steel", main.get("bar", "-")])
+        rows.append(["Distribution steel", dist.get("bar", "-")])
+    else:
+        for tag, s in el.get("strips", {}).items():
+            rows.append([f"Steel — {tag.replace('_', ' ')}", s.get("bar", "-")])
+    defl = el.get("deflection", {})
+    rows.append(["Deflection L/d",
+                 f"{defl.get('actual_L_by_d', 0):.1f} <= "
+                 f"{defl.get('allowable_L_by_d', 0):.1f}"])
+    return rows
+
+
+_DETAIL_ROWS_BY_GROUP = {
+    "slabs": _slab_detail_rows,
+    "beams": _beam_detail_rows,
+    "columns": _column_detail_rows,
+    "footings": _footing_detail_rows,
+}
 
 
 def _panel_case(i: int, j: int, nx: int, ny: int) -> int:
@@ -305,8 +455,16 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                     exposure: str = "moderate",
                     finish_kn_m2: float = 1.5,
                     wall_thickness_m: float = 0.23,
-                    seismic_detailing: bool | None = None) -> dict:
-    """Design every unique element of a regular RC frame building."""
+                    seismic_detailing: bool | None = None,
+                    figures_dir: str | None = None) -> dict:
+    """Design every unique element of a regular RC frame building.
+
+    figures_dir: when set, renders an SFD/BMD PNG per unique beam, a P-M
+    interaction PNG per column kind, and a base-pressure PNG per footing
+    kind into this directory, and returns their paths+captions in
+    result["figures"]. Left None (default) to skip rendering entirely —
+    matches every pre-existing caller/test exactly.
+    """
     nx_bays, ny_bays = len(x_spacings_m), len(y_spacings_m)
     if nx_bays < 1 or ny_bays < 1 or storeys < 1:
         raise ValueError("need >=1 bay each way and >=1 storey")
@@ -324,6 +482,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     il = ld.imposed_load(occupancy)
     if seismic_detailing is None:
         seismic_detailing = seismic_zone.upper() in ("III", "IV", "V")
+    figures: dict = {}
 
     # ---------------- slabs (unique panels) ----------------
     panels, panel_map = {}, {}
@@ -397,6 +556,10 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
             r["axis"] = direction
             r["grid_line_indices"] = [line]
             r["span_indices"] = list(range(n_spans_total))
+            if figures_dir:
+                _render_beam_figure(r, f"{key[0]}-span{key[1]}-trib{key[2]}",
+                                    direction, span, tw, b, D,
+                                    figures_dir, figures)
             r.pop("analysis", None)                 # arrays not JSON-safe
             beams[key] = r
             beam_len_total += sum(spans)
@@ -465,6 +628,9 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                          "Pu_kN": Pu, "P_service_kN": P_service,
                          "M_lateral_kNm": M_lat, "count": counts[kind],
                          "grid_intersections": intersections[kind]}
+        if figures_dir:
+            _render_column_figure(kind, b, D, fck, fy, nb, dia, r, Pu,
+                                  counts[kind], figures_dir, figures)
 
     # ---------------- footings ----------------
     footings = {}
@@ -478,6 +644,8 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         fd["count"] = col["count"]
         fd["grid_intersections"] = col["grid_intersections"]
         footings[kind] = fd
+        if figures_dir and fd.get("ok") and "q_min_service_kPa" in fd.get("data", {}):
+            _render_footing_figure(kind, fd, col["count"], figures_dir, figures)
 
     # ---------------- quantities (BOQ-shaped) ----------------
     def slab_steel(p):
@@ -561,13 +729,29 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         "assumptions": assumptions,
         "grid_lines": grid_lines,
         "violations": violations,
+        "figures": figures,
     }
 
 
 def building_report_pdf(result: dict, path: str = "out/building_report.pdf",
-                        figures: list | None = None) -> str:
-    """Consolidated PDF from a design_building() result."""
+                        figures: dict | list | None = None) -> str:
+    """Consolidated PDF from a design_building() result.
+
+    Every unique member TYPE (e.g. "interior columns", "x-dir span 4.00 m
+    beams", "corner footings") gets its own reinforcement detail table, its
+    clause-referenced checks, and — for beams/columns/footings — its SFD/BMD,
+    P-M interaction, or base-pressure PNG (from figures_dir on
+    design_building()). Deliberately long: this is the as-designed record an
+    engineer signs off, not a pass/fail summary.
+
+    figures: the dict keyed "{group}:{key}" -> (png_path, caption) returned
+    by design_building(figures_dir=...). A bare list of (path, caption) is
+    still accepted for backwards compatibility (dumped at the end, unkeyed).
+    """
     from ..pdfreport import PdfReport
+
+    fig_map = figures if isinstance(figures, dict) else {}
+    trailing_figs = figures if isinstance(figures, list) else []
 
     p = PdfReport("Building structural design — IS 456:2000 LSM",
                   ["IS456", "IS875-3", "IS1893-1", "IS13920", "SP16"])
@@ -591,9 +775,19 @@ def building_report_pdf(result: dict, path: str = "out/building_report.pdf",
     for group, title in (("slabs", "Slab panels"), ("beams", "Beams"),
                          ("columns", "Columns"), ("footings", "Footings")):
         p.add_section(title)
+        detail_fn = _DETAIL_ROWS_BY_GROUP[group]
         for key, el in result[group].items():
-            p.add_line(f"<b>{key}</b> (x{el.get('count', 1)})")
+            p.add_subsection(f"<b>{key}</b> (x{el.get('count', 1)})")
+            try:
+                rows = detail_fn(el)
+            except Exception:
+                rows = []
+            if rows:
+                p.add_table(["Item", "Value"], rows)
             p.add_checks(el["checks"])
+            fig = fig_map.get(f"{group}:{key}")
+            if fig:
+                p.add_figure(fig[0], fig[1])
     q = result["quantities"]
     p.add_section("Quantity takeoff")
     p.add_table(["Element", "Concrete (m3)", "Steel (kg)"],
@@ -602,7 +796,7 @@ def building_report_pdf(result: dict, path: str = "out/building_report.pdf",
     p.add_section("Assumptions")
     for a in result["assumptions"]:
         p.add_line(f"• {a}")
-    for fig in figures or []:
+    for fig in trailing_figs:
         png, caption = fig if isinstance(fig, (list, tuple)) else (fig, "")
         p.add_figure(png, caption)
     return p.save(path)
