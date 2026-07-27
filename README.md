@@ -128,6 +128,12 @@ Web UI gated by **BetterAuth** — email/password (no verification; `pnpm seed:u
 - **rcdesign cross-validation in CI** — pin `rcdesign` as a dev dependency and assert beam Mu / column P-M agreement as an independent oracle.
 - **IS 875-2:2023 imposed-load revision** — `tables.py` is versioned per code edition; adopting the 2023 values is a data swap.
 
+## Licence & disclaimer
+
+Licensed MIT — see [LICENSE](LICENSE).
+
 > **Disclaimer:** Code table values are transcribed from the standards during
-> research; verify against official BIS copies before professional use. This
-> tool is not a substitute for a licensed structural engineer.
+> research; verify against official BIS copies before professional use. Output is
+> intended for **preliminary design and estimation only** and is not a substitute for
+> review, stamping, and sign-off by a licensed structural engineer. Do not use it as
+> the sole basis for construction.
