@@ -124,6 +124,20 @@ def design_isolated_footing(P_service_kN: float, M_service_kNm: float,
     A_req = 1.1 * P / sbc_kpa
     side = math.sqrt(A_req)
     L = B = math.ceil(side / 0.05) * 0.05  # L along bending, B transverse
+
+    # Development-length floor on the plan size (cl 26.2.1 / 34.2.4.3).
+    # Step 6 below auto-selects a smaller bar when anchorage is tight, but it
+    # bottoms out at 8 mm: if even a bent 8 mm bar cannot develop within the
+    # projection this footing offers, no amount of re-detailing fixes it — the
+    # footing itself has to be wider. Size for that here, so the design comes
+    # out self-consistent instead of reporting an "increase_section" violation
+    # the caller has no knob to act on. Only L is raised: `avail` below takes
+    # max(proj_x, proj_y), so developing in one direction is enough, and
+    # growing both would oversize every footing on the plot.
+    _DIA_MIN = 8.0
+    _proj_req = tables.development_length(_DIA_MIN, fy, fck) - 8.0 * _DIA_MIN + cover
+    L = max(L, math.ceil((col_D_mm + 2 * _proj_req) / 1000.0 / 0.05) * 0.05)
+
     for _ in range(400):
         A = L * B
         q_avg = P / A
