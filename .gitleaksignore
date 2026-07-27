@@ -1,0 +1,7 @@
+# gitleaks allowlist — reviewed 2026-07-27 ahead of public release.
+# Manually triaged; confirmed NOT a real credential.
+# Regenerate with: gitleaks detect --source . --log-opts="--all" --redact
+#
+# `STRUCTAPI_KEYS=` in .env.example has an EMPTY value (unset = open dev mode, logged
+# loudly). gitleaks flags the assignment shape, not an actual secret.
+e53b5a1d5fa47e6d754c99d6017e8a09f2259231:.env.example:generic-api-key:23
