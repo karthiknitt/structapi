@@ -15,9 +15,14 @@ Done: MIT LICENSE, engineering disclaimer, gitleaks scan + allowlist, env-ignore
 hardening, README rewritten to lead with the agent architecture, integration doc marked
 shipped with verified live state.
 
-Not done: `docs/API-EXAMPLES.md` (needs a valid `x-api-key` against the live service),
-per-directory `CLAUDE.md` files for `python/iscodes/` and `agent/`, architecture SVGs
-(need approval before committing).
+Not done: per-directory `CLAUDE.md` files for `python/iscodes/` and `agent/`, architecture
+SVGs (need approval before committing).
+
+**Decided against:** publishing runnable API examples against the live service. Reviewers
+evaluate through the PlanForge website instead. Copy-pasteable requests would invite
+unmetered traffic on a `$0`-tier Cloud Run service and require issuing a working API key.
+The v1 envelope shape stays documented in §3 of `docs/PLANFORGE-INTEGRATION.md`, and
+`/docs` on a running instance serves the full OpenAPI reference for self-hosters.
 
 **Publishing is human-gated.** Do not change repo visibility without explicit approval —
 it is irreversible in practice.
