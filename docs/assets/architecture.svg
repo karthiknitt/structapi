@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="470" viewBox="0 0 900 470" font-family="ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <rect width="900" height="470" fill="#ffffff"/>
+
+  <text x="450" y="34" text-anchor="middle" font-size="19" font-weight="600" fill="#0f172a">Two front doors, one calculation core</text>
+  <text x="450" y="56" text-anchor="middle" font-size="13" fill="#64748b">Agents decide what to design. The engine decides what the numbers are.</text>
+
+  <!-- Entry points -->
+  <rect x="60" y="88" width="290" height="44" rx="6" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="205" y="110" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">Humans — natural language</text>
+  <text x="205" y="125" text-anchor="middle" font-size="11" fill="#3b82f6">StructAgent web UI / TUI</text>
+
+  <rect x="550" y="88" width="290" height="44" rx="6" fill="#f0fdfa" stroke="#5eead4"/>
+  <text x="695" y="110" text-anchor="middle" font-size="13" font-weight="600" fill="#115e59">PlanForge backend</text>
+  <text x="695" y="125" text-anchor="middle" font-size="11" fill="#0d9488">service-to-service, FastAPI</text>
+
+  <!-- Arrows down from entry points -->
+  <path d="M205 132 L205 162" stroke="#93c5fd" stroke-width="2" marker-end="url(#ab)"/>
+  <path d="M695 132 L695 250" stroke="#5eead4" stroke-width="2" marker-end="url(#at)"/>
+  <text x="706" y="180" font-size="10.5" fill="#0d9488">POST /v1/design/building</text>
+  <text x="706" y="195" font-size="10.5" fill="#0d9488">x-api-key</text>
+  <text x="706" y="210" font-size="10.5" fill="#0d9488">frozen v1 envelope</text>
+
+  <!-- Agent layer -->
+  <rect x="60" y="162" width="290" height="156" rx="8" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="205" y="184" text-anchor="middle" font-size="13.5" font-weight="600" fill="#1e3a8a">Eve agent layer</text>
+  <text x="205" y="201" text-anchor="middle" font-size="11" fill="#3b82f6">orchestrator routes to 8 specialists</text>
+  <g font-size="10.5" fill="#1e40af" text-anchor="middle">
+    <rect x="76" y="212" width="80" height="20" rx="3" fill="#dbeafe"/><text x="116" y="226">loads</text>
+    <rect x="164" y="212" width="80" height="20" rx="3" fill="#dbeafe"/><text x="204" y="226">beam</text>
+    <rect x="252" y="212" width="80" height="20" rx="3" fill="#dbeafe"/><text x="292" y="226">column</text>
+    <rect x="76" y="238" width="80" height="20" rx="3" fill="#dbeafe"/><text x="116" y="252">footing</text>
+    <rect x="164" y="238" width="80" height="20" rx="3" fill="#dbeafe"/><text x="204" y="252">slab</text>
+    <rect x="252" y="238" width="80" height="20" rx="3" fill="#dbeafe"/><text x="292" y="252">tank</text>
+    <rect x="120" y="264" width="80" height="20" rx="3" fill="#dbeafe"/><text x="160" y="278">sump</text>
+    <rect x="208" y="264" width="80" height="20" rx="3" fill="#dbeafe"/><text x="248" y="278">mixdesign</text>
+  </g>
+  <text x="205" y="302" text-anchor="middle" font-size="10" fill="#475569">Docker sandboxes · deny-all egress · models via OpenRouter</text>
+
+  <!-- structapi -->
+  <rect x="550" y="250" width="290" height="52" rx="8" fill="#f0fdfa" stroke="#0d9488" stroke-width="1.5"/>
+  <text x="695" y="272" text-anchor="middle" font-size="13.5" font-weight="600" fill="#115e59">structapi</text>
+  <text x="695" y="289" text-anchor="middle" font-size="11" fill="#0d9488">FastAPI · stateless REST</text>
+
+  <!-- Converging arrows -->
+  <path d="M205 318 L205 344 L410 344 L410 366" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#ac)"/>
+  <path d="M695 302 L695 344 L490 344 L490 366" stroke="#0d9488" stroke-width="2" fill="none" marker-end="url(#at2)"/>
+
+  <!-- Core -->
+  <rect x="240" y="366" width="420" height="66" rx="8" fill="#f8fafc" stroke="#0f172a" stroke-width="2"/>
+  <text x="450" y="390" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">python/iscodes — deterministic engine</text>
+  <text x="450" y="408" text-anchor="middle" font-size="10.5" fill="#475569">IS 456 · SP 16 · IS 875 · IS 1893 · IS 13920 · IS 3370 · IS 10262 · IS 6403</text>
+  <text x="450" y="423" text-anchor="middle" font-size="10.5" fill="#475569">no LLM in the calculation path · every check traces to a clause · 94 tests</text>
+
+  <defs>
+    <marker id="ab" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#93c5fd"/></marker>
+    <marker id="at" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#5eead4"/></marker>
+    <marker id="ac" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#2563eb"/></marker>
+    <marker id="at2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#0d9488"/></marker>
+  </defs>
+</svg>

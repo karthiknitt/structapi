@@ -6,26 +6,7 @@
 
 **[Architecture](docs/PLANFORGE-INTEGRATION.md)** · **[Consumer app (live)](https://planforge-mauve.vercel.app)** · **[Consumer repo](https://github.com/karthiknitt/planforge)**
 
-```
- Humans (natural language)              PlanForge backend (service-to-service)
-          │                                          │
-          ▼                                          │
- ┌─────────────────────────────┐                     │
- │ Eve agent layer              │                    │
- │ orchestrator → 8 subagents   │                    │
- │ loads · beam · column        │                    │
- │ footing · slab · tank        │                    │
- │ sump · mixdesign             │                    │
- └──────────────┬──────────────┘                     │ x-api-key
-                │ runs in Docker sandbox             │ frozen v1 envelope
-                │ (deny-all egress)                  │
-                ▼                                    ▼
-        ┌───────────────────┐          ┌──────────────────────┐
-        │ python/iscodes    │◀─────────│ structapi (FastAPI)  │
-        │ deterministic     │          │ stateless REST       │
-        │ IS-code engine    │          └──────────────────────┘
-        └───────────────────┘
-```
+![StructAgent architecture: two front doors — an Eve agent layer for humans and structapi for service callers — over one deterministic python/iscodes calculation core](docs/assets/architecture.svg)
 
 **The design principle:** the agents decide *what* to design and in what order; the
 `iscodes` library decides *what the numbers are*. No LLM sits in the calculation path, so
