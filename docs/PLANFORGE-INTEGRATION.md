@@ -1,6 +1,6 @@
 # StructAgent × PlanForge — Integration Architecture & Implementation Plan
 
-Status: **approved architecture, phased plan** · Owner: StructAgent repo · Date: 2026-07-12
+Status: **live in production** · Owner: StructAgent repo · Designed 2026-07-12 · Shipped 2026-07-12 · Last verified 2026-07-27
 
 ## 1. Context
 
@@ -51,6 +51,45 @@ Why structapi (deterministic REST) and not the agent API for PlanForge:
 Explicitly rejected: exposing Eve sessions to PlanForge (non-deterministic,
 slow, needs streaming consumption + API-key work on the eve channel for no
 benefit when inputs are structured).
+
+## 2a. Shipped state (verified 2026-07-27)
+
+The architecture above is deployed, not aspirational. All three components are live:
+
+| Component | URL | Verify |
+|---|---|---|
+| structapi | `https://structapi-912195238699.us-central1.run.app` | `curl .../v1/health` → `{"status":"ok","api_version":"1","iscodes_version":"0.3.0"}` |
+| PlanForge backend | `https://planforge-backend-912195238699.us-central1.run.app` | `curl .../api/health` → `{"status":"ok","service":"planforge-api"}` |
+| PlanForge frontend | `https://planforge-mauve.vercel.app` | browser |
+
+> Version note: the deployed Cloud Run revision serves `iscodes` **0.3.0**. Tag `v0.3.1`
+> (isolated-footing development-length sizing) is released and its image published to
+> GHCR, but not yet rolled out to the live service.
+
+The PlanForge backend exposes five routes implementing the full loop:
+
+```
+POST  /api/projects/{id}/structural/design              request a design
+GET   /api/projects/{id}/structural/status              poll progress
+POST  /api/projects/{id}/structural/approve             approve a revision
+GET   /api/projects/{id}/structural                     fetch current design
+GET   /api/projects/{id}/export/structural-drawing-set  export drawings
+```
+
+PlanForge-side implementation:
+
+| Concern | File (planforge repo) |
+|---|---|
+| HTTP client for structapi | `backend/app/services/structagent_client.py` |
+| Design request orchestration | `backend/app/services/structural_loop.py` |
+| Revision persistence | `backend/app/services/structural_store.py` |
+| API routes | `backend/app/api/routes/structural.py` |
+| Plinth beam design | `backend/app/services/plinth_beam_design.py` |
+| Drawing set export | `backend/app/engine/structural_drawing_set.py` |
+
+Contract freeze: `python/tests/fixtures/beam_envelope_v1.json` (this repo) — CI fails on
+any v1 envelope drift. The vendored copy of structapi inside PlanForge
+(`structapi-service/`) is byte-diffed against the pinned tag on every push and PR.
 
 ## 3. Contract (v1, frozen envelope)
 

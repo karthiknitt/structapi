@@ -1,5 +1,26 @@
 # StructAgent + structapi — IS-Code Structural Design
 
+> A multi-agent structural engineering system: an LLM orchestrator that routes to 8
+> specialist subagents, over a deterministic IS-code calculation engine the agents
+> cannot hallucinate around.
+
+**[Architecture](docs/PLANFORGE-INTEGRATION.md)** · **[Consumer app (live)](https://planforge-mauve.vercel.app)** · **[Consumer repo](https://github.com/karthiknitt/planforge)**
+
+![StructAgent architecture: two front doors — an Eve agent layer for humans and structapi for service callers — over one deterministic python/iscodes calculation core](docs/assets/architecture.svg)
+
+**The design principle:** the agents decide *what* to design and in what order; the
+`iscodes` library decides *what the numbers are*. No LLM sits in the calculation path, so
+results are reproducible and every check traces to an IS clause. The v1 response envelope
+is frozen by a golden fixture (`python/tests/fixtures/beam_envelope_v1.json`) and CI fails
+on any drift.
+
+Try the live engine — no clone required:
+
+```bash
+curl -s https://structapi-912195238699.us-central1.run.app/v1/health
+# {"status":"ok","api_version":"1","iscodes_version":"0.3.0"}
+```
+
 Two runnable products in one repo, sharing the **`iscodes`** IS-code engine:
 
 1. **StructAgent** — a multi-agent NL design app built on [Eve](https://eve.dev) (Vercel's durable agent framework), self-hosted per the [vercel-labs/steve](https://github.com/vercel-labs/steve) pattern: Postgres durability, Docker sandboxes with deny-all egress, TUI + authenticated web UI, models via OpenRouter.
@@ -128,6 +149,12 @@ Web UI gated by **BetterAuth** — email/password (no verification; `pnpm seed:u
 - **rcdesign cross-validation in CI** — pin `rcdesign` as a dev dependency and assert beam Mu / column P-M agreement as an independent oracle.
 - **IS 875-2:2023 imposed-load revision** — `tables.py` is versioned per code edition; adopting the 2023 values is a data swap.
 
+## Licence & disclaimer
+
+Licensed MIT — see [LICENSE](LICENSE).
+
 > **Disclaimer:** Code table values are transcribed from the standards during
-> research; verify against official BIS copies before professional use. This
-> tool is not a substitute for a licensed structural engineer.
+> research; verify against official BIS copies before professional use. Output is
+> intended for **preliminary design and estimation only** and is not a substitute for
+> review, stamping, and sign-off by a licensed structural engineer. Do not use it as
+> the sole basis for construction.

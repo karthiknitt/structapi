@@ -6,6 +6,11 @@ logs/
 /outputs/
 .env
 .env.local
+# `.env*.local` only matches the .local suffix — non-.local env files need explicit
+# entries or they get committed.
+.env.*.local
+.env.staging
+.env.production
 __pycache__/
 *.pyc
 .pytest_cache/
