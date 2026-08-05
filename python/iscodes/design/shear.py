@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 
+from .. import rounding
 from .. import tables
 
 
@@ -16,7 +17,7 @@ def design_stirrups(Vu_N: float, b: float, d: float, fck: float, fy: float,
     """Design vertical stirrups for factored shear Vu (N).
 
     Returns dict with tau_v, tau_c, tau_c_max, Asv, sv_calc, sv_provided
-    (rounded down to 5 mm), governing check name, and ok flag.
+    (rounded down to Site-Standard 25 mm), governing check name, and ok flag.
     """
     tau_v = Vu_N / (b * d)
     tau_cmax = tables.tau_c_max(fck)
@@ -41,7 +42,7 @@ def design_stirrups(Vu_N: float, b: float, d: float, fck: float, fy: float,
         governing = "designed shear (cl 40.4)"
 
     sv = min(sv, sv_max)
-    sv_prov = int(math.floor(sv / 5.0) * 5)
+    sv_prov = rounding.site_spacing(sv)
     return {"tau_v": tau_v, "tau_c": tau_c, "tau_c_max": tau_cmax,
             "Asv": Asv, "sv_calc": sv, "sv_provided": sv_prov,
             "governing": governing, "ok": True}

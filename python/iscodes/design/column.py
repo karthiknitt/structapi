@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .. import rounding
 from .. import tables
 from ..materials import Concrete, Steel
 
@@ -233,7 +234,7 @@ def design_column(b: float, D: float, fck: float, fy: float,
 
     # ties, cl 26.5.3.2(c)
     tie_min = max(bar_dia / 4, 6.0)
-    pitch_max = min(min(b, D), 16 * bar_dia, 300.0)
+    pitch_max = rounding.site_spacing(min(min(b, D), 16 * bar_dia, 300.0))
     data.update(tie_dia=tie_dia, tie_dia_min=tie_min, tie_pitch_max=pitch_max)
     checks.append(("tie dia >= max(db/4, 6) (cl 26.5.3.2c-1)", tie_dia >= tie_min))
 
@@ -242,8 +243,9 @@ def design_column(b: float, D: float, fck: float, fy: float,
         checks.append(("min width 300 for >2 storey support (IS 13920 cl 7.1)",
                        min(b, D) >= tables.DUCTILE["column_min_b_storeys"]))
         lo = max(max(b, D), L / 6, 450.0)
-        s_conf = min(tables.DUCTILE["confine_spacing_max"],
-                     tables.DUCTILE["confine_spacing_6db"] * bar_dia)
+        s_conf = rounding.site_spacing(
+            min(tables.DUCTILE["confine_spacing_max"],
+                tables.DUCTILE["confine_spacing_6db"] * bar_dia))
         data.update(confine_length_lo=lo, confine_spacing_max=s_conf)
 
     return ColumnCheck(all(ok for _, ok in checks), checks, data)
