@@ -184,15 +184,44 @@ _DETAIL_ROWS_BY_GROUP = {
 }
 
 
-def _panel_case(i: int, j: int, nx: int, ny: int) -> int:
-    """IS 456 Table 26 case from panel position in the grid."""
-    edge_x = i == 0 or i == nx - 1
-    edge_y = j == 0 or j == ny - 1
-    if edge_x and edge_y:
-        return 4  # two adjacent edges discontinuous (corner panel)
-    if edge_x or edge_y:
-        return 2 if edge_y else 3  # one short/long edge discontinuous (approx)
-    return 1  # interior
+_PANEL_CASE_BY_DISC = {
+    # (discontinuous short edges, discontinuous long edges) -> Table 26 case
+    (0, 0): 1,  # interior panels (four edges continuous)
+    (1, 0): 2,  # one short edge discontinuous
+    (0, 1): 3,  # one long edge discontinuous
+    (1, 1): 4,  # two adjacent edges discontinuous
+    (2, 0): 5,  # two short edges discontinuous
+    (0, 2): 6,  # two long edges discontinuous
+    (2, 1): 7,  # three edges discontinuous (one long edge continuous)
+    (1, 2): 8,  # three edges discontinuous (one short edge continuous)
+    (2, 2): 9,  # four edges discontinuous
+}
+
+
+def _panel_case(i: int, j: int, nx: int, ny: int, sx: float, sy: float) -> int:
+    """IS 456 Table 26 case from panel position plus this panel's own span
+    orientation.
+
+    An edge is continuous where it is shared with a neighbouring panel and
+    discontinuous where it lies on the building boundary. Table 26's "short"
+    and "long" edges are named by *edge length* relative to lx = min(sx, sy),
+    not by grid axis, so which axis carries the short edges flips per panel:
+
+    - edges perpendicular to x (at x=0 and x=sx) have length ``sy``
+    - edges perpendicular to y (at y=0 and y=sy) have length ``sx``
+
+    Square panels (sx == sy) have no distinct short/long edge; they take the
+    ``sx <= sy`` branch so the mapping stays deterministic.
+    """
+    n_x_disc = int(i == 0) + int(i == nx - 1)
+    n_y_disc = int(j == 0) + int(j == ny - 1)
+    if sx <= sy:
+        # sx is the short span -> y-perpendicular edges (length sx) are short
+        n_short_disc, n_long_disc = n_y_disc, n_x_disc
+    else:
+        # sy is the short span -> x-perpendicular edges (length sy) are short
+        n_short_disc, n_long_disc = n_x_disc, n_y_disc
+    return _PANEL_CASE_BY_DISC[(n_short_disc, n_long_disc)]
 
 
 def _column_kind(i: int, j: int, nx_bays: int, ny_bays: int) -> str:
@@ -488,7 +517,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     panels, panel_map = {}, {}
     for i, sx in enumerate(x_spacings_m):
         for j, sy in enumerate(y_spacings_m):
-            case = _panel_case(i, j, nx_bays, ny_bays)
+            case = _panel_case(i, j, nx_bays, ny_bays, sx, sy)
             lx, ly = min(sx, sy), max(sx, sy)
             key = (round(lx, 2), round(ly, 2), case)
             panel_map[(i, j)] = key
