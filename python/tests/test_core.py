@@ -54,6 +54,23 @@ def test_bearing_capacity_factors_phi30():
     assert f["Ngamma"] == pytest.approx(22.4, abs=0.2)
 
 
+def test_sa_by_g_rock_spectrum():
+    """Type I (rock) spectrum per IS 1893 cl 6.4.2 — correct 1.00/T branch."""
+    # Ascending branch (T <= 0.40 s)
+    assert tables.sa_by_g(0.40, "rock") == pytest.approx(2.5, abs=0.005)
+
+    # Descending branch (0.40 < T <= 4.0 s)
+    assert tables.sa_by_g(1.0, "rock") == pytest.approx(1.00, abs=0.005)
+
+    # Floor (T > 4.0 s)
+    assert tables.sa_by_g(4.0, "rock") == pytest.approx(0.25, abs=0.005)
+    assert tables.sa_by_g(5.0, "rock") == pytest.approx(0.25, abs=0.005)
+
+    # Regression: medium and soft soil coefficients unchanged
+    assert tables.sa_by_g(1.0, "medium") == pytest.approx(1.36, abs=0.005)
+    assert tables.sa_by_g(1.0, "soft") == pytest.approx(1.67, abs=0.005)
+
+
 # ---------------------------------------------------------------------------
 # materials.py
 # ---------------------------------------------------------------------------

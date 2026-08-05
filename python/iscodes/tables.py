@@ -364,7 +364,7 @@ def sa_by_g(T: float, soil: str = "medium") -> float:
     if T <= 0.10:
         return 1 + 15 * T
     if s in ("rock", "hard", "i", "type i"):
-        return 2.5 if T <= 0.40 else min(2.5, max(1.36 / T, 0.34 if T > 4 else 1.36 / T))
+        return 2.5 if T <= 0.40 else 1.00 / T if T <= 4.0 else 1.00 / 4
     if s in ("medium", "ii", "type ii"):
         return 2.5 if T <= 0.55 else 1.36 / T if T <= 4.0 else 1.36 / 4
     if s in ("soft", "iii", "type iii"):
