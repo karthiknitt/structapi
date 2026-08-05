@@ -4,7 +4,8 @@ import json
 
 import pytest
 
-from iscodes.design.building import design_building
+from iscodes.design.building import _panel_case, design_building
+from iscodes.tables import TABLE_26
 
 
 @pytest.fixture(scope="module")
@@ -70,3 +71,98 @@ def test_json_serializable_and_deterministic(ref):
 def test_assumptions_echoed(ref):
     assert any("simply supported" in a for a in ref["assumptions"])
     assert len(ref["assumptions"]) >= 5
+
+
+# --------------------------------------------------------------------------
+# IS 456 Table 26 panel-case mapping (white-box unit tests on _panel_case)
+#
+# An edge is discontinuous when it lies on the building boundary. Edges
+# perpendicular to x have length sy; edges perpendicular to y have length sx.
+# Table 26 names edges by length: "short" edges are the pair of length
+# lx = min(sx, sy), "long" edges the pair of length ly = max(sx, sy).
+# --------------------------------------------------------------------------
+
+# (i, j, nx, ny, sx, sy, expected_case)
+_PANEL_CASE_VECTORS = [
+    # --- 3x2 reference grid: x_spacings=[3.5, 4.0, 3.5], y_spacings=[4.0, 4.5]
+    # corner: x-edges 1 disc (long, len sy=4.0), y-edges 1 disc (short, 3.5)
+    (0, 0, 3, 2, 3.5, 4.0, 4),
+    # x-interior, y-boundary; sx == sy -> sx treated as short span
+    (1, 0, 3, 2, 4.0, 4.0, 2),
+    # x-interior, j == ny-1 so the top (short, len sx=4.0) edge is disc
+    (1, 1, 3, 2, 4.0, 4.5, 2),
+    # far corner: one short + one long edge disc
+    (2, 1, 3, 2, 3.5, 4.5, 4),
+    (0, 1, 3, 2, 3.5, 4.5, 4),
+    # --- single row of panels (ny == 1): both y-perpendicular edges disc
+    # sx > sy -> y-edges (len sx) are the LONG pair -> two long edges disc
+    (1, 0, 3, 1, 4.0, 3.0, 6),
+    # ...same row, end panel: + one short (x-perpendicular, len sy) edge disc
+    (0, 0, 3, 1, 4.0, 3.0, 8),
+    (2, 0, 3, 1, 4.0, 3.0, 8),
+    # sx < sy -> y-edges (len sx) are the SHORT pair -> two short edges disc
+    (1, 0, 3, 1, 3.0, 4.0, 5),
+    # ...plus one long edge disc at the row end
+    (0, 0, 3, 1, 3.0, 4.0, 7),
+    # --- single column of panels (nx == 1), mirror of the above
+    (0, 1, 1, 3, 3.0, 4.0, 6),
+    (0, 1, 1, 3, 4.0, 3.0, 5),
+    # --- isolated single panel: four edges discontinuous
+    (0, 0, 1, 1, 4.0, 3.0, 9),
+    (0, 0, 1, 1, 4.0, 4.0, 9),
+    # --- 3x3 grid: true interior and single-edge-discontinuous panels
+    (1, 1, 3, 3, 4.0, 4.0, 1),
+    # i == 0 -> one x-perpendicular (len sy=4.0 = long) edge disc
+    (0, 1, 3, 3, 3.5, 4.0, 3),
+    # j == 0 -> one y-perpendicular (len sx=3.5 = short) edge disc
+    (1, 0, 3, 3, 3.5, 4.0, 2),
+]
+
+
+@pytest.mark.parametrize("i,j,nx,ny,sx,sy,expected", _PANEL_CASE_VECTORS)
+def test_panel_case_mapping(i, j, nx, ny, sx, sy, expected):
+    assert _panel_case(i, j, nx, ny, sx, sy) == expected
+
+
+@pytest.mark.parametrize(
+    "i,j,nx,ny,sx,sy,expected",
+    [v for v in _PANEL_CASE_VECTORS if v[4] != v[5]])
+def test_panel_case_span_swap_is_symmetric(i, j, nx, ny, sx, sy, expected):
+    """Transposing the grid and the spans must give the same Table 26 case:
+    the case depends on edge lengths and continuity, not on axis naming.
+    (Square panels are excluded — there the short/long split is an arbitrary
+    tie-break, so transposition can legitimately flip e.g. case 2 <-> 3.)"""
+    assert _panel_case(j, i, ny, nx, sy, sx) == expected
+
+
+@pytest.mark.parametrize("i,j,nx,ny,sx,sy,expected", _PANEL_CASE_VECTORS)
+def test_panel_case_matches_table_26_continuity_pattern(
+        i, j, nx, ny, sx, sy, expected):
+    """Cross-check against tables.TABLE_26: the negative-moment coefficient
+    nx (short-span direction) exists only if at least one LONG edge is
+    continuous, and ny only if at least one SHORT edge is continuous."""
+    n_x_disc = int(i == 0) + int(i == nx - 1)
+    n_y_disc = int(j == 0) + int(j == ny - 1)
+    n_short, n_long = (n_y_disc, n_x_disc) if sx <= sy else (n_x_disc, n_y_disc)
+    row = TABLE_26[expected]
+    assert (row["nx"] is None) == (n_long == 2)
+    assert (row["ny"] is None) == (n_short == 2)
+
+
+def test_panel_case_covers_all_nine_cases():
+    """Cases 5-9 were unreachable before this fix; guard against regression."""
+    produced = {c for *_, c in _PANEL_CASE_VECTORS}
+    assert produced == set(range(1, 10)), sorted(set(range(1, 10)) - produced)
+
+
+def test_single_row_building_uses_two_long_edges_discontinuous():
+    """End-to-end: a single row of panels must now produce a case >= 5."""
+    res = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[3.0],
+        storeys=1, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500)
+    cases = {p["case_"] for p in res["slabs"].values()}
+    assert cases <= {5, 6, 7, 8, 9}, cases
+    assert 6 in cases, cases
