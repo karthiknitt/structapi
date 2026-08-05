@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 
+from .. import rounding
 from .. import tables
 from .. import serviceability as svc
 
@@ -23,7 +24,7 @@ def _ast_annex_g(Mu, b, d, fck, fy):
 
 def _spacing_for(ast_req_per_m: float, dia: int, cap: float) -> float:
     s = BAR_AREA[dia] * 1000.0 / max(ast_req_per_m, 1e-6)
-    return max(min(math.floor(s / 5.0) * 5.0, cap), 50.0)
+    return max(rounding.site_spacing(s, cap), 50.0)
 
 
 def _strip_design(Mu_Nmm_per_m: float, D: float, d: float, fck: float, fy: float,
@@ -56,7 +57,7 @@ def design_one_way_slab(lx_m: float, w_dl: float, w_il: float, fck: float,
     auto = D_mm is None
     if auto:
         d_trial = lx_m * 1000.0 / (base * 1.4)  # assume kt ~ 1.4 for slabs
-        D_mm = math.ceil((d_trial + cover + bar_dia / 2) / 10.0) * 10.0
+        D_mm = rounding.site_dimension(d_trial + cover + bar_dia / 2)
         D_mm = max(D_mm, 100.0)
     for _ in range(12):
         result = _one_way_once(lx_m, w_dl, w_il, fck, fy, support, D_mm,
@@ -116,13 +117,13 @@ def design_two_way_slab(lx_m: float, ly_m: float, w_dl: float, w_il: float,
     if auto:
         # cl 24.1: span/overall-depth 28 (ss) / 32 (cont) for HYSD as start
         base = 32.0 if case != 9 else 28.0
-        D_mm = max(math.ceil((lx_m * 1000.0 / base + 0) / 10.0) * 10.0, 100.0)
+        D_mm = max(rounding.site_dimension(lx_m * 1000.0 / base), 100.0)
     for _ in range(12):
         result = _two_way_once(lx_m, ly_m, r, w_dl, w_il, fck, fy, case,
                                corners_held, D_mm, cover, bar_dia)
         if result["ok"] or not auto:
             return result
-        D_mm += 10.0
+        D_mm += 25.0
     return result
 
 
