@@ -66,6 +66,9 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
         Asc_reqd = 0.0
 
     Ast_min = flexure.min_steel(b, d, fy)
+    if seismic:
+        Ast_min_ductile = max(0.85 / fy, 0.24 * math.sqrt(fck) / fy) * b * d
+        Ast_min = max(Ast_min, Ast_min_ductile)
     Ast_max = flexure.max_steel(b, D)
     Ast_reqd = max(Ast_reqd, Ast_min)
 
@@ -115,6 +118,8 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
                        b >= tables.DUCTILE["beam_min_b"]))
         checks.append((f"IS 13920 pt <= {tables.DUCTILE['beam_max_pt']*100:.1f}% (cl 6.2.2)",
                        pt / 100.0 <= tables.DUCTILE["beam_max_pt"]))
+        checks.append(("IS 13920 min tension steel Ast_min (cl 6.2.1)",
+                       Ast_prov >= Ast_min))
 
     ok = all(v for _, v in checks)
 
