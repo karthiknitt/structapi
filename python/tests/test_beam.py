@@ -163,6 +163,55 @@ def test_design_beam_seismic_checks():
     assert any("13920" in n for n in names)
 
 
+def test_ductile_beam_min_steel_is13920():
+    """Verify IS 13920 cl 6.2.1 minimum tension steel enforcement in seismic design."""
+    # Design parameters per acceptance criterion
+    b, D, fck, fy = 230.0, 450.0, 25.0, 500.0
+    cover, bar_dia, stirrup_dia = 30.0, 20.0, 8.0
+    d = D - cover - stirrup_dia - bar_dia / 2.0  # 402 mm
+
+    # Expected IS 13920 minimum: max(0.85/fy, 0.24*sqrt(fck)/fy) * b * d
+    ast_min_ductile_expected = max(0.85 / fy, 0.24 * math.sqrt(fck) / fy) * b * d
+    # 0.24*sqrt(25)/500 = 0.0024, which governs over 0.0017
+    assert ast_min_ductile_expected == pytest.approx(0.0024 * b * d, rel=0.01)
+
+    # Light loads to ensure minimum-steel-governed section
+    r_seismic = beamdesign.design_beam(
+        span_m=2.0, w_dl_kn_m=5.0, w_il_kn_m=2.0,
+        b=b, D=D, fck=fck, fy=fy, support="ss",
+        cover=cover, bar_dia=bar_dia, stirrup_dia=stirrup_dia,
+        seismic=True
+    )
+
+    # Assertion 1: Ast_prov_mm2 meets the ductile minimum
+    ast_prov_seismic = r_seismic["design"]["Ast_prov_mm2"]
+    assert ast_prov_seismic >= ast_min_ductile_expected
+
+    # Assertion 2: New check tuple is present and True
+    check_names = [name for name, ok in r_seismic["checks"]]
+    assert any("IS 13920 min tension steel Ast_min (cl 6.2.1)" in name for name in check_names)
+    seismic_check_ok = [ok for name, ok in r_seismic["checks"]
+                        if "IS 13920 min tension steel Ast_min (cl 6.2.1)" in name]
+    assert len(seismic_check_ok) == 1 and seismic_check_ok[0]
+
+    # Non-seismic regression guard
+    r_non_seismic = beamdesign.design_beam(
+        span_m=2.0, w_dl_kn_m=5.0, w_il_kn_m=2.0,
+        b=b, D=D, fck=fck, fy=fy, support="ss",
+        cover=cover, bar_dia=bar_dia, stirrup_dia=stirrup_dia,
+        seismic=False
+    )
+
+    ast_prov_non_seismic = r_non_seismic["design"]["Ast_prov_mm2"]
+    # Seismic should require at least as much steel as non-seismic
+    assert ast_prov_seismic >= ast_prov_non_seismic
+
+    # Check tuple should be absent in non-seismic case
+    check_names_non_seismic = [name for name, ok in r_non_seismic["checks"]]
+    assert not any("IS 13920 min tension steel Ast_min (cl 6.2.1)" in name
+                   for name in check_names_non_seismic)
+
+
 # ---------------------------------------------------------------------------
 # plotting.py
 # ---------------------------------------------------------------------------
