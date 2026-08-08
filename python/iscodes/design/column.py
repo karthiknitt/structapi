@@ -164,7 +164,8 @@ def design_column(b: float, D: float, fck: float, fy: float,
                   L_unsupported_mm: float | None = None,
                   n_bars: int = 8, bar_dia: float = 20.0,
                   cover: float = 40.0, tie_dia: float = 8.0,
-                  seismic: bool = False) -> ColumnCheck:
+                  seismic: bool = False,
+                  max_beam_span_m: float = 0.0) -> ColumnCheck:
     """Full column check for a trial reinforcement. All lengths mm.
 
     lex/ley: effective lengths (mm). Returns pass/fail per clause with data.
@@ -240,8 +241,17 @@ def design_column(b: float, D: float, fck: float, fy: float,
 
     # IS 13920 overlay
     if seismic:
-        checks.append(("min width 300 for >2 storey support (IS 13920 cl 7.1)",
-                       min(b, D) >= tables.DUCTILE["column_min_b_storeys"]))
+        # cl 7.1.2 -- the 300mm minimum only kicks in when the column
+        # supports a beam of span > 5m, or has an unsupported length > 4m;
+        # otherwise the ordinary IS 456 minimum-practical-dimension of
+        # 200mm governs.
+        strict_trigger = max_beam_span_m > 5.0 or (L_unsupported_mm or 0.0) > 4000.0
+        min_dim_required = (tables.DUCTILE["column_min_b_storeys"]
+                            if strict_trigger else 200.0)
+        data.update(strict_trigger=strict_trigger,
+                    min_dim_required=min_dim_required)
+        checks.append((f"min width {min_dim_required:.0f} per span/length trigger "
+                       f"(IS 13920 cl 7.1.2)", min(b, D) >= min_dim_required))
         # cl 7.4.1 -- length of the special confining zone from each joint face
         lo = max(max(b, D), L / 6, 450.0)
         # cl 7.4.6 -- hoop pitch in lo: smallest of min(b,D)/4, 6*dia_smallest

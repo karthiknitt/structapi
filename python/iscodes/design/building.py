@@ -382,11 +382,12 @@ def _column_violations(kind: str, col: dict) -> list:
                                   data.get("confine_spacing_max"),
                                   data.get("confine_spacing_limit"), "mm",
                                   "review_inputs"))
-        elif name.startswith("min width 300"):
+        elif name.startswith("min width"):
             out.append(_violation("column", None, grid_ref, None, name,
                                   min(col["b_mm"], col["D_mm"]),
-                                  tables.DUCTILE["column_min_b_storeys"], "mm",
-                                  "increase_section"))
+                                  data.get("min_dim_required",
+                                          tables.DUCTILE["column_min_b_storeys"]),
+                                  "mm", "increase_section"))
         else:
             out.append(_violation("column", None, grid_ref, None, name,
                                   None, None, "", "review_inputs"))
@@ -662,6 +663,13 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         for j in range(ny_bays + 1):
             intersections[_column_kind(i, j, nx_bays, ny_bays)].append([i, j])
 
+    # IS 13920 cl 7.1.2 trigger: beams are keyed by (direction, span, trib
+    # width), not by which column kind they frame into, and the grid-line
+    # indices they carry don't cleanly resolve to interior/edge/corner
+    # without disproportionate new bookkeeping -- use the single largest
+    # span in the building as a conservative proxy for every column kind.
+    max_beam_span_m = max((bm["span_m"] for bm in beams.values()), default=0.0)
+
     columns = {}
     for kind, at in trib.items():
         if counts[kind] == 0:
@@ -678,7 +686,8 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                               Mux_kNm=M_lat, Muy_kNm=0.3 * M_lat,
                               L_unsupported_mm=col_h_mm - beam_D_typ,
                               n_bars=nb, bar_dia=dia,
-                              seismic=seismic_detailing, cover=cov)
+                              seismic=seismic_detailing, cover=cov,
+                              max_beam_span_m=max_beam_span_m)
             if r.ok:
                 break
             if dia < 25:
