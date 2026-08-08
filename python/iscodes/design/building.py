@@ -26,9 +26,11 @@ import math
 import os
 from dataclasses import asdict, is_dataclass
 
+from .. import detailing
 from .. import loads as ld
 from .. import tables
 from ..analysis.beam import continuous_moments
+from . import combinations as comb
 from . import flexure
 from .column import ColumnSection, design_column, interaction_curve, rect_bar_layout
 from .footing import design_isolated_footing
@@ -561,6 +563,14 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         "portal-frame lateral distribution (interior columns 2x exterior share)",
         "steel mass = designed Ast x length x 7850 kg/m3 x 1.10 waste",
         "column moments: lateral portal moments + minimum eccentricity per IS 456 cl 25.4",
+        "columns designed for the full IS 1893 cl 6.3.1.2 combination set "
+        "{1.5(DL+IL), 1.2(DL+IL+-EL), 1.5(DL+-EL), 0.9DL+-1.5EL} about both "
+        "axes; every combination is checked and the worst P-M interaction "
+        "governs. Reported Pu/Mux/Muy are the envelope maxima",
+        "beams under ductile detailing carry an additional support (hogging) "
+        "moment of 1.5 x the portal joint moment for seismic reversal, added "
+        "on top of the gravity moment; this is a single always-added worst "
+        "case, not a per-combination beam envelope",
     ]
     if sbc_kpa is None:
         sbc_kpa = 150.0
@@ -612,6 +622,60 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     slab_dl = slab_D / 1000.0 * tables.UNIT_WEIGHTS["rcc"] + finish_kn_m2
     w_floor_service = slab_dl + il                       # kN/m2
 
+    # ---------------- lateral loads ----------------
+    # Computed before the beam loop (it moved up from below the beams in the
+    # gravity-only version) because beams now need the portal frame moment to
+    # build their seismic reversal demand, not just the columns.
+    floor_dead = (slab_dl + 2.0) * area             # +2 kN/m2 frame allowance
+    storey_weights = [ld.seismic_weight(floor_dead, il * area, il,
+                                        is_roof=(k == storeys - 1))
+                     for k in range(storeys)]
+    heights = [(k + 1) * storey_height_m for k in range(storeys)]
+    seis = ld.base_shear(storey_weights, heights, zone=seismic_zone,
+                         soil=soil, I=1.0, R=5.0 if seismic_detailing else 3.0)
+    Vb = basic_wind_speed or (tables.BASIC_WIND_SPEED.get((city or "").lower(), 39))
+    wind = ld.wind_pressure(Vb, h_total, terrain_category)
+    wind_base_shear = 1.2 * wind.pd * Ly * h_total   # Cf=1.2 on broader face
+    lateral_gov = "seismic" if seis.VB >= wind_base_shear else "wind"
+    V_lateral = max(seis.VB, wind_base_shear)
+
+    n_cols = (nx_bays + 1) * (ny_bays + 1)
+    n_int = max(nx_bays - 1, 0) * max(ny_bays - 1, 0)
+    # portal frame: interior columns take 2 shares, exterior 1
+    shares = 2 * n_int + (n_cols - n_int)
+    storey_shear_unit = V_lateral / shares
+
+    # Base overturning moment and the per-column axial couple it induces on
+    # the extreme column lines (IS 1893 cl 6.3.1.2 combos need P_E, not just
+    # the storey shear). V_lateral is a single scalar enveloping both
+    # principal directions, so the shorter plan dimension is taken as the
+    # lever arm -- the conservative attribution, since it maximises dP.
+    OTM_kNm = comb.overturning_moment_kNm(seis.storey_forces, lateral_gov,
+                                          wind_base_shear, h_total)
+    if Lx <= Ly:
+        otm_lever_arm_m, n_extreme_line = Lx, ny_bays + 1
+    else:
+        otm_lever_arm_m, n_extreme_line = Ly, nx_bays + 1
+    dP_otm_kN = comb.overturning_axial_kN(OTM_kNm, otm_lever_arm_m,
+                                          n_extreme_line)
+    assumptions.append(
+        "overturning axial: base OTM resisted by a portal couple between the "
+        f"extreme column lines ({otm_lever_arm_m:.2f} m lever arm, "
+        f"{n_extreme_line} columns per line) -> +-{dP_otm_kN:.1f} kN on edge/"
+        "corner columns, interior columns unaffected (near the neutral axis)")
+    assumptions.append(
+        "lateral action is a single scalar envelope max(seismic VB, wind) "
+        "with no per-direction split, so Ex and Ey carry the same magnitude "
+        "in the combination table (conservative, not a directional analysis)")
+
+    # Portal beam-end moment at a joint. Joint equilibrium: the column
+    # moments above and below a joint are balanced by the beam moments left
+    # and right of it, so a beam end picks up roughly one column moment.
+    # The interior (2-share) column moment is used for every beam -- beams
+    # are keyed by span/tributary, not by the column kind they frame into,
+    # so the larger of the two is the conservative choice.
+    M_E_beam_kNm = storey_shear_unit * 2 * storey_height_m / 2.0
+
     # ---------------- beams (unique by span/tributary) ----------------
     wall_kn_m = ld.wall_load_per_m(wall_thickness_m, storey_height_m)
     beams, beam_len_total = {}, 0.0
@@ -662,18 +726,68 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                     "Vu_override_kN": max(abs(v) for k, v in cm.items()
                                           if k.startswith("V_")),
                 }
+            # ---- lateral (seismic) end moment, IS 1893 cl 6.3.1.2 ----------
+            # Under a ductile-detailing design the frame's lateral moment
+            # reverses, so a beam end must carry hogging in one direction and
+            # sagging in the other. The lateral moment peaks at the *supports*
+            # (mid-span is the portal point of contraflection), so it is added
+            # to the support/hogging demand only, on top of whatever gravity
+            # moment the Table 12/13 path (or the simply-supported fallback)
+            # already produced. The 1.5 factor is the worst lateral factor in
+            # the combination table -- a single always-added worst case rather
+            # than a full 5-combo beam envelope (see PC-2 report).
+            M_E_support_kNm = 0.0
+            if seismic_detailing and M_E_beam_kNm > 0:
+                M_E_support_kNm = 1.5 * M_E_beam_kNm
+                if not continuous_ok:
+                    # Simply-supported gravity fallback carries no support
+                    # moment of its own; seed the span override with the
+                    # unchanged gravity value so only the top face changes.
+                    kw["Mu_span_override_kNm"] = 1.5 * (w_dl + w_il) * span ** 2 / 8.0
+                kw["Mu_support_override_kNm"] = (
+                    kw.get("Mu_support_override_kNm", 0.0) + M_E_support_kNm)
             # 'fixed' only selects the continuous L/d basic ratio (cl 23.2.1)
             # and a continuity-shaped SFD/BMD for the figure; the section is
             # designed from the Table 12/13 overrides above, not from analyze().
             sup = "fixed" if continuous_ok else "ss"
+            # ---- IS 13920 ductile detailing checks (reversal) --------------
+            # Wired here rather than inside design_beam() so the frozen
+            # /v1/calc/beam contract is untouched. pt is the TENSION face at
+            # the joint (top steel, hogging under lateral load) and pc the
+            # compression face there (bottom steel) -- that pairing is what
+            # makes the cl 6.2.3 ratio a reversal check.
+            def _ductile(res: dict, b_mm: float, D_mm: float) -> list:
+                if not seismic_detailing:
+                    return []
+                dsn = res["design"]
+                pt_top = dsn.get("top_steel", {}).get("pt_percent", 0.0)
+                pc_bot = dsn.get("pt_percent", 0.0)
+                # cl 6.2.3 (pc >= 0.5*pt) is already enforced inside
+                # design_beam() on areas for the same b,d -- identical
+                # condition, so it is dropped here to avoid a duplicate
+                # check name with a different wording in the same list.
+                return [c for c in detailing.ductile_beam_checks(
+                            b_mm, D_mm, pt_top, pc_bot)
+                        if not c[0].startswith("compression steel")]
+
             r = None
+            dchecks: list = []
             while D <= 1200:
                 r = design_beam(span, w_dl, w_il, b, D, fck, fy,
                                 support=sup, seismic=seismic_detailing,
                                 cover=cov, **kw)
-                if r["ok"]:
+                # the ductile checks participate in the auto-sizing loop, not
+                # just the report -- a pt > 2.5% at the joint is fixed by a
+                # deeper section, so the sizer must be able to see it.
+                dchecks = _ductile(r, b, D)
+                if r["ok"] and all(v for _, v in dchecks):
                     break
                 D += 50
+            if seismic_detailing:
+                r["ductile_beam_checks"] = dchecks
+                r["checks"] = list(r["checks"]) + dchecks
+                r["ok"] = r["ok"] and all(v for _, v in dchecks)
+                r["M_lateral_support_kNm"] = M_E_support_kNm
             r["b_mm"], r["D_mm"] = b, D
             r["span_m"], r["trib_width_m"] = span, tw
             r["count"], r["n_spans"] = 1, n_spans_total
@@ -691,31 +805,12 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
 
     beam_D_typ = max(bm["D_mm"] for bm in beams.values())
 
-    # ---------------- lateral loads ----------------
-    floor_dead = (slab_dl + 2.0) * area             # +2 kN/m2 frame allowance
-    storey_weights = [ld.seismic_weight(floor_dead, il * area, il,
-                                        is_roof=(k == storeys - 1))
-                     for k in range(storeys)]
-    heights = [(k + 1) * storey_height_m for k in range(storeys)]
-    seis = ld.base_shear(storey_weights, heights, zone=seismic_zone,
-                         soil=soil, I=1.0, R=5.0 if seismic_detailing else 3.0)
-    Vb = basic_wind_speed or (tables.BASIC_WIND_SPEED.get((city or "").lower(), 39))
-    wind = ld.wind_pressure(Vb, h_total, terrain_category)
-    wind_base_shear = 1.2 * wind.pd * Ly * h_total   # Cf=1.2 on broader face
-    lateral_gov = "seismic" if seis.VB >= wind_base_shear else "wind"
-    V_lateral = max(seis.VB, wind_base_shear)
-
     # ---------------- columns (corner / edge / interior) ----------------
-    n_cols = (nx_bays + 1) * (ny_bays + 1)
-    n_int = max(nx_bays - 1, 0) * max(ny_bays - 1, 0)
     n_corner = 4
     n_edge = n_cols - n_int - n_corner
     tx, ty = max(x_spacings_m), max(y_spacings_m)
     trib = {"interior": tx * ty, "edge": tx * ty / 2, "corner": tx * ty / 4}
     counts = {"interior": n_int, "edge": n_edge, "corner": n_corner}
-    # portal frame: interior columns take 2 shares, exterior 1
-    shares = 2 * n_int + (n_cols - n_int)
-    storey_shear_unit = V_lateral / shares
     col_h_mm = storey_height_m * 1000
 
     intersections = {"interior": [], "edge": [], "corner": []}
@@ -731,23 +826,50 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     max_beam_span_m = max((bm["span_m"] for bm in beams.values()), default=0.0)
 
     columns = {}
+    uplift_violations: list = []
     for kind, at in trib.items():
         if counts[kind] == 0:
             continue
-        P_service = (w_floor_service * at + wall_kn_m * (tx + ty) / 2) * storeys
-        Pu = 1.5 * P_service
+        # Split the service takedown back into its dead and imposed parts --
+        # the combination table factors them differently (0.9/1.2/1.5 on DL,
+        # 0.0/1.2/1.5 on IL), so the pre-summed P_service is not enough.
+        # P_D + P_IL == P_service exactly, so the gravity combo 1.5(DL+IL)
+        # still reproduces the previous 1.5*P_service to the last bit.
+        P_D = (slab_dl * at + wall_kn_m * (tx + ty) / 2) * storeys
+        P_IL = il * at * storeys
+        P_service = P_D + P_IL
         share = 2 if kind == "interior" else 1
         M_lat = storey_shear_unit * share * storey_height_m / 2  # kNm portal
+        # interior columns sit near the neutral axis of overturning
+        P_E = 0.0 if kind == "interior" else dP_otm_kN
+        env = comb.combination_envelope(P_D_kN=P_D, M_D_kNm=0.0,
+                                        P_IL_kN=P_IL, M_IL_kNm=0.0,
+                                        P_E_kN=P_E, M_E_kNm=M_lat)
+        # Only the compression combos can be run through design_column(),
+        # which assumes an axially compressed section. A net-tension combo is
+        # reported via uplift_governs instead (see below).
+        design_combos = [c for c in env["combos"] if c["Pu_kN"] > 0.0]
         b = D = 300.0
         nb, dia = 8, 16
         r = None
+        gov = None
         for _ in range(14):
-            r = design_column(b, D, fck, fy, Pu_kN=Pu,
-                              Mux_kNm=M_lat, Muy_kNm=0.3 * M_lat,
-                              L_unsupported_mm=col_h_mm - beam_D_typ,
-                              n_bars=nb, bar_dia=dia,
-                              seismic=seismic_detailing, cover=cov,
-                              max_beam_span_m=max_beam_span_m)
+            trials = [
+                (c, design_column(b, D, fck, fy, Pu_kN=c["Pu_kN"],
+                                  Mux_kNm=c["Mux_kNm"], Muy_kNm=c["Muy_kNm"],
+                                  L_unsupported_mm=col_h_mm - beam_D_typ,
+                                  n_bars=nb, bar_dia=dia,
+                                  seismic=seismic_detailing, cover=cov,
+                                  max_beam_span_m=max_beam_span_m))
+                for c in design_combos
+            ]
+            # every combination must pass; the reported one is the worst.
+            # Taking the max P-M interaction (rather than simply the max Pu)
+            # matters because a column is not monotonically worse with axial
+            # load -- below the balanced point more compression *raises*
+            # moment capacity, so the max-Pu row is not always governing.
+            gov, r = max(trials, key=lambda t: (not t[1].ok,
+                                                t[1].data.get("interaction", 0.0)))
             if r.ok:
                 break
             if dia < 25:
@@ -758,11 +880,42 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         columns[kind] = {"ok": r.ok, "checks": r.checks, "data": r.data,
                          "b_mm": b, "D_mm": D, "bars": f"{nb}-{dia} dia",
                          "n_bars": nb, "bar_dia": dia,
-                         "Pu_kN": Pu, "P_service_kN": P_service,
+                         # Headline design actions are the ENVELOPE maxima,
+                         # not the interaction-governing row: every combo in
+                         # the table was designed for, and the maxima are what
+                         # a reader/BOQ/PDF means by "the design axial load"
+                         # and "the design moment". The interaction-governing
+                         # row is reported separately below.
+                         "Pu_kN": env["Pu_max_kN"], "P_service_kN": P_service,
                          "M_lateral_kNm": M_lat, "count": counts[kind],
-                         "grid_intersections": intersections[kind]}
+                         "grid_intersections": intersections[kind],
+                         # ---- additive: combination envelope (PC-2) ----
+                         "P_dead_kN": P_D, "P_imposed_kN": P_IL,
+                         "P_overturning_kN": P_E,
+                         "Pu_gravity_kN": 1.5 * P_service,
+                         "Mux_kNm": env["Mux_max_kNm"],
+                         "Muy_kNm": env["Muy_max_kNm"],
+                         "governing_combination": gov["name"],
+                         "Pu_governing_kN": gov["Pu_kN"],
+                         "Mux_governing_kNm": gov["Mux_kNm"],
+                         "Muy_governing_kNm": gov["Muy_kNm"],
+                         "Pu_max_kN": env["Pu_max_kN"],
+                         "Pu_min_kN": env["Pu_min_kN"],
+                         "uplift_governs": env["uplift_governs"],
+                         "combinations": env["combos"]}
+        if env["uplift_governs"]:
+            # Disclosed scope boundary: no tension-column design exists in
+            # this library, so the compression checks above do NOT cover
+            # this column's governing condition.
+            uplift_violations.append(_violation(
+                member_type="column", axis=None,
+                grid_ref=f"column class {kind}", span_m=None,
+                check=("net tension under 0.9DL-1.5EL (IS 1893 cl 6.3.1.2) — "
+                       "uplift/anchorage design not performed by this model"),
+                actual=env["Pu_min_kN"], limit=0.0, unit="kN",
+                remedy_hint="review_inputs"))
         if figures_dir:
-            _render_column_figure(kind, b, D, fck, fy, nb, dia, r, Pu,
+            _render_column_figure(kind, b, D, fck, fy, nb, dia, r, gov["Pu_kN"],
                                   counts[kind], figures_dir, figures, cover=cov)
 
     # ---------------- footings ----------------
@@ -846,6 +999,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     grid_lines = {"x_coords_m": x_coords_m, "y_coords_m": y_coords_m}
 
     violations = _collect_violations(panels, beams, columns, footings, sbc_kpa)
+    violations += uplift_violations
     if fck < exp["min_fck"]:
         # Building-level, not per-member — no existing member_type="building"
         # (or equivalent whole-building-scope) convention found elsewhere in
