@@ -649,8 +649,42 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                                         is_roof=(k == storeys - 1))
                      for k in range(storeys)]
     heights = [(k + 1) * storey_height_m for k in range(storeys)]
-    seis = ld.base_shear(storey_weights, heights, zone=seismic_zone,
-                         soil=soil, I=1.0, R=5.0 if seismic_detailing else 3.0)
+    R_seismic = 5.0 if seismic_detailing else 3.0
+    # cl 7.6.2 masonry-infill formula (0.09h/sqrt(d)), computed once per
+    # principal direction with that direction's own plan dimension as d —
+    # this building model always carries mandatory infill wall loads
+    # (wall_thickness_m/wall_kn_m below), so the infill formula applies
+    # throughout, not the bare-RC-frame formula (0.075h^0.75) used
+    # previously. Ta_x/Ta_y (hence Ah_x/Ah_y) only differ when Lx != Ly.
+    seis_x = ld.base_shear(storey_weights, heights, zone=seismic_zone,
+                           soil=soil, I=1.0, R=R_seismic,
+                           frame="infill", base_dim=Lx)
+    seis_y = ld.base_shear(storey_weights, heights, zone=seismic_zone,
+                           soil=soil, I=1.0, R=R_seismic,
+                           frame="infill", base_dim=Ly)
+    # Governing scalar: the numerically larger of Ah_x/Ah_y, not an assumed
+    # "shorter dimension -> shorter period -> higher Ah" rule. The IS 1893
+    # cl 6.4.2 design spectrum (tables.sa_by_g) is *not* monotonic in T: it
+    # rises (1+15T) below T=0.10s, is flat at the 2.5 plateau up to Tc
+    # (0.40/0.55/0.67 s depending on soil), then falls as ~1/T beyond Tc.
+    # Low-rise masonry-infill buildings often land on the rising branch or
+    # the plateau, where the *shorter* period can give an equal or *lower*
+    # Ah than the longer one — so min(Lx, Ly) is not a safe proxy; compare
+    # the computed Ah values directly and take the worse case.
+    seis = seis_x if seis_x.Ah >= seis_y.Ah else seis_y
+    assumptions.append(
+        "fundamental period switched from the bare-RC-frame formula "
+        "(0.075 h^0.75) to the IS 1893 cl 7.6.2 masonry-infill formula "
+        "(0.09 h / sqrt(d)), applied separately per direction with d=Lx "
+        "and d=Ly (this building model always has mandatory infill walls, "
+        "so there is no bare-frame case to preserve); the governing scalar "
+        "used downstream (V_lateral, storey_shear_unit, M_lateral_kNm, "
+        "column/footing design) is whichever direction gives the larger "
+        "Ah, not assumed from the shorter plan dimension -- the cl 6.4.2 "
+        "spectrum's rising/plateau/falling shape makes that assumption "
+        "unsafe. This generally shortens Ta and can raise base shear "
+        "relative to the old bare-frame value -- a disclosed behavioural "
+        "change, not a silent one")
     Vb = basic_wind_speed or (tables.BASIC_WIND_SPEED.get((city or "").lower(), 39))
     wind = ld.wind_pressure(Vb, h_total, terrain_category)
     wind_base_shear = 1.2 * wind.pd * Ly * h_total   # Cf=1.2 on broader face
@@ -1066,6 +1100,10 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         "lateral": {"governing": lateral_gov,
                     "seismic_VB_kN": round(seis.VB, 1),
                     "seismic_Ah": seis.Ah, "seismic_Ta_s": round(seis.Ta, 3),
+                    "seismic_Ta_x_s": round(seis_x.Ta, 3),
+                    "seismic_Ah_x": seis_x.Ah,
+                    "seismic_Ta_y_s": round(seis_y.Ta, 3),
+                    "seismic_Ah_y": seis_y.Ah,
                     "wind_pd_kN_m2": round(wind.pd, 3),
                     "wind_base_shear_kN": round(wind_base_shear, 1),
                     "R": 5.0 if seismic_detailing else 3.0,
