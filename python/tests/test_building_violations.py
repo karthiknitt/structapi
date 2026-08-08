@@ -14,7 +14,9 @@ from iscodes.design.building import design_building
 
 ALLOWED_REMEDIES = {"reduce_span", "increase_section", "add_grid_line",
                     "increase_sbc", "increase_grade", "review_inputs"}
-ALLOWED_MEMBER_TYPES = {"beam", "column", "slab", "footing"}
+# "building" = whole-building-scope checks (e.g. fck vs exposure min grade,
+# IS 456 Table 5) that don't belong to any single member.
+ALLOWED_MEMBER_TYPES = {"beam", "column", "slab", "footing", "building"}
 
 
 def _pass_kwargs():
@@ -106,8 +108,13 @@ def test_violation_schema(failing):
 def test_violation_actual_exceeds_limit_where_finite(failing):
     # every mapped check here is an "actual <= limit" style clause, so a
     # violation with both values finite must show actual > limit.
+    # Exception: member_type="building" (e.g. fck vs exposure min grade) is a
+    # "actual >= limit" style clause instead — its shortfall direction is
+    # inverted (actual < limit on violation), so it's excluded here.
     checked_any = False
     for v in failing["violations"]:
+        if v["member_type"] == "building":
+            continue
         a, lim = v["actual"], v["limit"]
         if a is None or lim is None:
             continue
@@ -131,6 +138,24 @@ def test_grid_lines_deterministic_and_shaped(failing):
     gl = failing["grid_lines"]
     assert gl["x_coords_m"] == [0.0, 12.0, 24.0]
     assert gl["y_coords_m"] == [0.0, 12.0]
+
+
+# ---------------------------------------------------------------------------
+# PA-5: IS 456 Table 5 exposure enforcement — grade-vs-exposure violation
+# ---------------------------------------------------------------------------
+
+def test_exposure_grade_violation_when_fck_below_min():
+    # severe exposure requires min_fck=30 (tables.EXPOSURE); fck=20 is
+    # durability-inadequate and must surface as a building-level violation.
+    r = design_building(**{**_pass_kwargs(), "exposure": "severe", "fck": 20})
+    grade_violations = [v for v in r["violations"]
+                        if v["remedy_hint"] == "increase_grade"
+                        and v["member_type"] == "building"]
+    assert len(grade_violations) == 1
+    v = grade_violations[0]
+    assert "severe" in v["check"]
+    assert v["actual"] == 20.0
+    assert v["limit"] == 30.0
 
 
 # ---------------------------------------------------------------------------

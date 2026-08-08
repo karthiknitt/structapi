@@ -166,3 +166,37 @@ def test_single_row_building_uses_two_long_edges_discontinuous():
     cases = {p["case_"] for p in res["slabs"].values()}
     assert cases <= {5, 6, 7, 8, 9}, cases
     assert 6 in cases, cases
+
+
+# ---------------------------------------------------------------------------
+# PA-5: IS 456 Table 5 exposure enforcement
+# ---------------------------------------------------------------------------
+
+def test_ref_building_at_grade_exposure_boundary_has_no_grade_violation(ref):
+    # ref uses exposure default ("moderate", min_fck=25) with fck=25 exactly
+    # -- the boundary case (fck == min_fck) must NOT raise increase_grade.
+    grade_violations = [v for v in ref["violations"]
+                        if v["remedy_hint"] == "increase_grade"
+                        and v["member_type"] == "building"]
+    assert grade_violations == []
+
+
+def test_exposure_cover_propagates_to_beam(ref):
+    # ref uses exposure default ("moderate" -> cover=30), which happens to
+    # equal design_beam()'s own hardcoded default (30) -- so this alone
+    # can't prove propagation happened rather than a coincidental match.
+    # Use exposure="severe" (cover=45, != beam's default of 30) as the real
+    # propagation proof: design_beam()'s returned inputs.cover must be 45,
+    # not the function's own default.
+    severe = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=30, fy=500, exposure="severe")
+    beam_s = next(iter(severe["beams"].values()))
+    assert beam_s["inputs"]["cover"] == 45.0
+
+    # ref's beam (moderate default) still matches for a sanity cross-check.
+    beam_ref = next(iter(ref["beams"].values()))
+    assert beam_ref["inputs"]["cover"] == 30.0
