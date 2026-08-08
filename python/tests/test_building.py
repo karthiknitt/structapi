@@ -269,3 +269,202 @@ def test_crack_width_deemed_to_satisfy_assumption_string(monkeypatch):
               for cw in r["beams"].values()), \
         "expected at least one beam relying on the deemed-to-satisfy route"
     assert any("deemed-to-satisfy" in a for a in r["assumptions"])
+
+
+# ---------------------------------------------------------------------------
+# PC-4: IS 875-2 cl 3.2 live-load reduction opt-in
+# ---------------------------------------------------------------------------
+
+def test_apply_ll_reduction_default_false():
+    """Regression: default apply_ll_reduction=False produces byte-identical
+    results to explicitly passing False."""
+    default = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500)
+    explicit_false = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=False)
+    # Compare critical fields to ensure identical behavior
+    for kind in ["interior", "edge", "corner"]:
+        assert default["columns"][kind]["P_imposed_kN"] == \
+               explicit_false["columns"][kind]["P_imposed_kN"]
+        assert default["columns"][kind]["P_service_kN"] == \
+               explicit_false["columns"][kind]["P_service_kN"]
+        assert default["columns"][kind]["Pu_kN"] == \
+               explicit_false["columns"][kind]["Pu_kN"]
+
+
+def test_ll_reduction_2_storey_10_percent():
+    """Acceptance criterion: 2-storey building with apply_ll_reduction=True
+    shows exactly 10% reduction in P_IL (IS 875-2 Table 2 value for 2 storeys)."""
+    unreduced = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=False)
+    reduced = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=True)
+
+    # P_imposed_kN should be reduced by 10%
+    for kind in ["interior", "edge", "corner"]:
+        p_il_unreduced = unreduced["columns"][kind]["P_imposed_kN"]
+        p_il_reduced = reduced["columns"][kind]["P_imposed_kN"]
+        expected_reduced = p_il_unreduced * 0.9  # 10% reduction
+        assert p_il_reduced == pytest.approx(expected_reduced, rel=1e-10)
+
+
+def test_ll_reduction_assumption_string_when_enabled():
+    """When apply_ll_reduction=True and occupancy is eligible, an assumption
+    string must note the reduction percentage and storeys."""
+    r = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=True)
+
+    assert any("live-load reduction" in a and "applied" in a and "10" in a
+               for a in r["assumptions"])
+
+
+def test_ll_reduction_assumption_string_when_disabled():
+    """When apply_ll_reduction=False, an assumption string must explicitly
+    state that reduction is not applied."""
+    r = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=False)
+
+    assert any("live-load reduction" in a and "not applied" in a
+               for a in r["assumptions"])
+
+
+def test_ll_reduction_excluded_for_roof_accessible():
+    """Roof occupancy must never be reduced, even when apply_ll_reduction=True."""
+    unreduced = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="roof_accessible", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=False)
+    reduced = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="roof_accessible", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=True)
+
+    # P_imposed_kN must be identical (no reduction applied)
+    for kind in ["interior", "edge", "corner"]:
+        assert reduced["columns"][kind]["P_imposed_kN"] == \
+               unreduced["columns"][kind]["P_imposed_kN"]
+
+
+def test_ll_reduction_excluded_for_office_storage():
+    """Office storage (high-load occupancy) must never be reduced."""
+    unreduced = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="office_storage", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=False)
+    reduced = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="office_storage", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=True)
+
+    # P_imposed_kN must be identical (no reduction applied)
+    for kind in ["interior", "edge", "corner"]:
+        assert reduced["columns"][kind]["P_imposed_kN"] == \
+               unreduced["columns"][kind]["P_imposed_kN"]
+
+
+def test_ll_reduction_excluded_for_parking():
+    """Parking occupancy must never be reduced."""
+    unreduced = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="parking_car", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=False)
+    reduced = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="parking_car", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=True)
+
+    # P_imposed_kN must be identical (no reduction applied)
+    for kind in ["interior", "edge", "corner"]:
+        assert reduced["columns"][kind]["P_imposed_kN"] == \
+               unreduced["columns"][kind]["P_imposed_kN"]
+
+
+def test_ll_reduction_5_storey_40_percent():
+    """Higher storey count test: 5 storeys → 40% reduction per IS 875-2 cl 3.2."""
+    unreduced = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=5, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=False)
+    reduced = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=5, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=True)
+
+    # P_imposed_kN should be reduced by 40%
+    for kind in ["interior", "edge", "corner"]:
+        p_il_unreduced = unreduced["columns"][kind]["P_imposed_kN"]
+        p_il_reduced = reduced["columns"][kind]["P_imposed_kN"]
+        expected_reduced = p_il_unreduced * 0.6  # 40% reduction
+        assert p_il_reduced == pytest.approx(expected_reduced, rel=1e-10)
+
+
+def test_ll_reduction_reaches_footing_design():
+    """The reduced P_IL must flow through to footing design (P_service_kN)."""
+    unreduced = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=False)
+    reduced = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, apply_ll_reduction=True)
+
+    # P_service_kN (used in footing design) must reflect the reduced P_IL
+    for kind in ["interior", "edge", "corner"]:
+        p_service_unreduced = unreduced["columns"][kind]["P_service_kN"]
+        p_service_reduced = reduced["columns"][kind]["P_service_kN"]
+        assert p_service_reduced < p_service_unreduced
+
+        # Footing must also have been designed with the reduced load
+        footing_unreduced = unreduced["footings"][kind]
+        footing_reduced = reduced["footings"][kind]
+        # Base pressure should be lower when P_service is lower (assuming
+        # the same footing geometry was chosen by the auto-sizing loop)
+        # We can't guarantee exact equality because the sizing loop may
+        # choose a different footing size, so we just check both are ok.
+        assert footing_unreduced["ok"]
+        assert footing_reduced["ok"]
