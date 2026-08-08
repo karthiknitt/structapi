@@ -57,14 +57,15 @@ def _render_beam_figure(r: dict, key: str, direction: str, span: float,
 
 def _render_column_figure(kind: str, b: float, D: float, fck: float, fy: float,
                           nb: int, dia: float, r, Pu: float, count: int,
-                          figures_dir: str, figures: dict) -> None:
+                          figures_dir: str, figures: dict, cover: float = 40.0) -> None:
     """P-M interaction PNG for one column kind (corner/edge/interior)."""
     try:
         from ..plotting import plot_pm_interaction
-        # cover=40.0, tie_dia=8.0 — design_column()'s own defaults, which the
-        # building chain never overrides, so the section drawn here matches
-        # the section actually designed.
-        cc = 40.0 + 8.0 + dia / 2.0
+        # tie_dia=8.0 — design_column()'s own default (also not overridden by
+        # the building chain). cover is the exposure-derived value actually
+        # passed to design_column(), so the section drawn here matches the
+        # section actually designed.
+        cc = cover + 8.0 + dia / 2.0
         sec = ColumnSection(b, D, fck, fy, rect_bar_layout(b, D, cc, nb, dia))
         curve = interaction_curve(sec) / 1e3
         curve[:, 1] /= 1e3
@@ -484,6 +485,13 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         seismic_detailing = seismic_zone.upper() in ("III", "IV", "V")
     figures: dict = {}
 
+    # IS 456 Table 5 durability: exposure -> min grade + nominal cover.
+    # Invalid exposure keys raise KeyError here, matching how invalid
+    # soil/zone strings already fail naturally (tables.ZONE_FACTOR[zone.upper()]
+    # in loads.base_shear()) rather than a redundant explicit check.
+    exp = tables.EXPOSURE[exposure]
+    cov = exp["cover"]
+
     # ---------------- slabs (unique panels) ----------------
     panels, panel_map = {}, {}
     for i, sx in enumerate(x_spacings_m):
@@ -497,11 +505,11 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                 continue
             if ly / lx > 2.0:
                 r = design_one_way_slab(lx, finish_kn_m2, il, fck, fy,
-                                        support="continuous")
+                                        support="continuous", cover=cov)
                 r["type"] = "one-way"
             else:
                 r = design_two_way_slab(lx, ly, finish_kn_m2, il, fck, fy,
-                                        case=case)
+                                        case=case, cover=cov)
                 r["type"] = "two-way"
             r["count"] = 1
             r["lx_m"], r["ly_m"], r["case_"] = lx, ly, case
@@ -546,7 +554,8 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
             r = None
             while D <= 1200:
                 r = design_beam(span, w_dl, w_il, b, D, fck, fy,
-                                support="ss", seismic=seismic_detailing)
+                                support="ss", seismic=seismic_detailing,
+                                cover=cov)
                 if r["ok"]:
                     break
                 D += 50
@@ -614,7 +623,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                               Mux_kNm=M_lat, Muy_kNm=0.3 * M_lat,
                               L_unsupported_mm=col_h_mm - beam_D_typ,
                               n_bars=nb, bar_dia=dia,
-                              seismic=seismic_detailing)
+                              seismic=seismic_detailing, cover=cov)
             if r.ok:
                 break
             if dia < 25:
@@ -630,7 +639,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                          "grid_intersections": intersections[kind]}
         if figures_dir:
             _render_column_figure(kind, b, D, fck, fy, nb, dia, r, Pu,
-                                  counts[kind], figures_dir, figures)
+                                  counts[kind], figures_dir, figures, cover=cov)
 
     # ---------------- footings ----------------
     footings = {}
@@ -705,6 +714,15 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     grid_lines = {"x_coords_m": x_coords_m, "y_coords_m": y_coords_m}
 
     violations = _collect_violations(panels, beams, columns, footings, sbc_kpa)
+    if fck < exp["min_fck"]:
+        # Building-level, not per-member — no existing member_type="building"
+        # (or equivalent whole-building-scope) convention found elsewhere in
+        # this file's violation helpers, so this establishes the precedent.
+        violations.append(_violation(
+            member_type="building", axis=None, grid_ref="whole building",
+            span_m=None, check=f"fck >= exposure min grade ({exposure})",
+            actual=fck, limit=exp["min_fck"], unit="MPa",
+            remedy_hint="increase_grade"))
 
     return {
         "ok": all_checks_ok,
