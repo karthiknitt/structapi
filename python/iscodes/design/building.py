@@ -538,6 +538,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                     finish_kn_m2: float = 1.5,
                     wall_thickness_m: float = 0.23,
                     seismic_detailing: bool | None = None,
+                    apply_ll_reduction: bool = False,
                     figures_dir: str | None = None) -> dict:
     """Design every unique element of a regular RC frame building.
 
@@ -578,6 +579,23 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
             "sbc_kpa not provided — defaulted to 150 kPa (conservative "
             "placeholder; verify against an actual soil report)")
     il = ld.imposed_load(occupancy)
+    # Live-load reduction assumption (added before seismic_detailing check
+    # because reduction state is decided here and applies globally)
+    if apply_ll_reduction:
+        never_reduce_occupancies = {"roof_accessible", "roof_non_accessible",
+                                     "office_storage", "parking_car",
+                                     "assembly_fixed_seating", "assembly_movable_seating"}
+        if occupancy not in never_reduce_occupancies:
+            pct_at_this_storeys = tables.ll_reduction_pct(storeys)
+            assumptions.append(
+                f"live-load reduction (IS 875-2 cl 3.2): applied, "
+                f"{pct_at_this_storeys:.0f}% at {storeys} storey(ies) carried")
+        else:
+            assumptions.append(
+                f"live-load reduction (IS 875-2 cl 3.2): not applied "
+                f"(occupancy '{occupancy}' in exclusion list)")
+    else:
+        assumptions.append("live-load reduction (IS 875-2 cl 3.2): not applied (default)")
     if seismic_detailing is None:
         seismic_detailing = seismic_zone.upper() in ("III", "IV", "V")
     figures: dict = {}
@@ -847,6 +865,15 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         # still reproduces the previous 1.5*P_service to the last bit.
         P_D = (slab_dl * at + wall_kn_m * (tx + ty) / 2) * storeys
         P_IL = il * at * storeys
+        P_IL_unreduced = P_IL  # save for later comparison/reporting if needed
+        # Apply IS 875-2 cl 3.2 live-load reduction if enabled and occupancy allows
+        ll_reduction_pct_applied = 0.0
+        never_reduce_occupancies = {"roof_accessible", "roof_non_accessible",
+                                     "office_storage", "parking_car",
+                                     "assembly_fixed_seating", "assembly_movable_seating"}
+        if apply_ll_reduction and occupancy not in never_reduce_occupancies:
+            ll_reduction_pct_applied = tables.ll_reduction_pct(storeys)
+            P_IL = P_IL * (1.0 - ll_reduction_pct_applied / 100.0)
         P_service = P_D + P_IL
         share = 2 if kind == "interior" else 1
         M_lat = storey_shear_unit * share * storey_height_m / 2  # kNm portal
