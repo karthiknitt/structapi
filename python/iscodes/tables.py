@@ -346,7 +346,7 @@ def k2(height_m: float, terrain_category: int) -> float:
 
 ZONE_FACTOR = {"II": 0.10, "III": 0.16, "IV": 0.24, "V": 0.36}  # Table 3
 
-IMPORTANCE = {"ordinary": 1.0, "residential_large": 1.2, "important": 1.5}  # Table 8
+IMPORTANCE = {"ordinary": 1.0, "important_community": 1.2}  # Table 8
 
 RESPONSE_REDUCTION = {"OMRF": 3.0, "SMRF": 5.0,
                       "ordinary_shear_wall": 3.0, "ductile_shear_wall": 4.0,
@@ -503,7 +503,6 @@ DUCTILE = {
     "beam_min_b": 200.0,           # mm, cl 6.1.3
     "beam_max_pt": 0.025,          # cl 6.2.2
     "column_min_b_storeys": 300.0, # mm, columns supporting > 2 storeys
-    "strong_column_factor": 1.4,   # sum Mc >= 1.4 sum Mb, cl 7.2.1
     "confine_spacing_max": 100.0,  # mm hoop spacing in lo, cl 8.1
     "confine_spacing_6db": 6.0,    # 6 x smallest long. bar dia
 }
