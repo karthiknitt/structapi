@@ -582,3 +582,131 @@ def test_ll_reduction_reaches_footing_design():
         # choose a different footing size, so we just check both are ok.
         assert footing_unreduced["ok"]
         assert footing_reduced["ok"]
+
+
+# ---------------------------------------------------------------------------
+# PD-5 — chain integration: parapet, OH-tank roof loads, combined footings
+# ---------------------------------------------------------------------------
+
+def _pd5_base_kwargs():
+    return dict(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500)
+
+
+def test_pd5_all_three_none_by_default_matches_main_byte_for_byte():
+    """Regression: with none of parapet_height_m/oh_tank_capacity_litres/
+    edge_setback_m passed, the result is identical (JSON round-trip equal)
+    to the pre-PD-5 fields, and none of the new optional keys appear."""
+    default = design_building(**_pd5_base_kwargs())
+    explicit_none = design_building(
+        **_pd5_base_kwargs(), parapet_height_m=None,
+        oh_tank_capacity_litres=None, edge_setback_m=None)
+    assert json.dumps(default, sort_keys=True) == json.dumps(explicit_none, sort_keys=True)
+    for key in ("parapet", "oh_tank", "combined_footings"):
+        assert key not in default
+
+
+# ---- parapet ----------------------------------------------------------
+
+def test_parapet_absent_key_when_not_requested():
+    r = design_building(**_pd5_base_kwargs())
+    assert "parapet" not in r
+
+
+def test_parapet_reported_with_hand_computed_moment_shear():
+    r = design_building(**_pd5_base_kwargs(), parapet_height_m=1.2)
+    assert "parapet" in r
+    data = r["parapet"]["data"]
+    W, h = 0.75, 1.2
+    assert data["Mu_kNm"] == pytest.approx(1.5 * W * h, rel=1e-9)
+    assert data["Vu_kN"] == pytest.approx(1.5 * W, rel=1e-9)
+    assert any("parapet" in a for a in r["assumptions"])
+
+
+def test_parapet_does_not_alter_existing_fields():
+    without = design_building(**_pd5_base_kwargs())
+    with_parapet = design_building(**_pd5_base_kwargs(), parapet_height_m=1.0)
+    for key in ("columns", "footings", "beams", "slabs", "quantities", "lateral"):
+        assert json.dumps(without[key], sort_keys=True) == \
+               json.dumps(with_parapet[key], sort_keys=True)
+
+
+# ---- OH tank ------------------------------------------------------------
+
+def test_oh_tank_absent_key_when_not_requested():
+    r = design_building(**_pd5_base_kwargs())
+    assert "oh_tank" not in r
+
+
+def test_oh_tank_increases_roof_seismic_weight_and_column_load():
+    without = design_building(**_pd5_base_kwargs())
+    with_tank = design_building(**_pd5_base_kwargs(), oh_tank_capacity_litres=10000)
+    assert "oh_tank" in with_tank
+    ot = with_tank["oh_tank"]
+    # implementation rounds to 2 dp for the report field; compare with an
+    # absolute tolerance that accommodates that rounding.
+    assert ot["estimated_weight_kN"] == pytest.approx(
+        (10000 / 1000.0) * 9.81 * 1.18, abs=0.01)
+    kind = ot["supporting_column_kind"]
+    assert kind in with_tank["columns"]
+    # the tank-bearing column's P_dead (and hence P_service/Pu) must rise
+    assert (with_tank["columns"][kind]["P_dead_kN"]
+            > without["columns"][kind]["P_dead_kN"])
+    # roof-level seismic weight must rise -> base shear cannot decrease
+    assert with_tank["lateral"]["seismic_VB_kN"] >= without["lateral"]["seismic_VB_kN"]
+
+
+def test_oh_tank_none_leaves_columns_and_lateral_unchanged():
+    without = design_building(**_pd5_base_kwargs())
+    explicit_none = design_building(**_pd5_base_kwargs(), oh_tank_capacity_litres=None)
+    assert json.dumps(without["columns"], sort_keys=True) == \
+           json.dumps(explicit_none["columns"], sort_keys=True)
+    assert json.dumps(without["lateral"], sort_keys=True) == \
+           json.dumps(explicit_none["lateral"], sort_keys=True)
+
+
+# ---- combined footings / edge_setback_m ----------------------------------
+
+def test_edge_setback_absent_key_when_not_requested():
+    r = design_building(**_pd5_base_kwargs())
+    assert "combined_footings" not in r
+
+
+def test_edge_setback_generous_no_trigger():
+    r = design_building(**_pd5_base_kwargs(), edge_setback_m=5.0)
+    assert "combined_footings" not in r
+    assert not any("combined footing" in v["check"] for v in r["violations"])
+
+
+def test_edge_setback_tight_triggers_combined_footing_and_violation():
+    # Reference building's edge/corner isolated footings are ~1.15-1.25 m
+    # square (half-L ~0.55-0.6 m) -- a 0.5 m edge_setback_m genuinely
+    # can't be satisfied by either.
+    r = design_building(**_pd5_base_kwargs(), edge_setback_m=0.5)
+    assert "combined_footings" in r
+    assert set(r["combined_footings"]) <= {"edge", "corner"}
+    assert r["combined_footings"]
+    for kind, cf in r["combined_footings"].items():
+        assert "L_m" in cf and "checks" in cf
+        assert "x" not in cf and "V" not in cf and "M" not in cf  # JSON-safe
+    combined_violations = [v for v in r["violations"]
+                           if "combined footing" in v["check"]]
+    assert combined_violations
+    for v in combined_violations:
+        assert v["member_type"] == "footing"
+        assert v["actual"] > v["limit"] == 0.5
+    # the isolated footings[] entry is left untouched (additive, not a
+    # replacement)
+    without_setback = design_building(**_pd5_base_kwargs())
+    for kind in r["combined_footings"]:
+        assert json.dumps(r["footings"][kind], sort_keys=True) == \
+               json.dumps(without_setback["footings"][kind], sort_keys=True)
+
+
+def test_edge_setback_json_serializable():
+    r = design_building(**_pd5_base_kwargs(), edge_setback_m=0.5)
+    json.dumps(r)  # must not raise (numpy arrays would break this)

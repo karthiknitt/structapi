@@ -32,8 +32,9 @@ from .. import tables
 from ..analysis.beam import continuous_moments
 from . import combinations as comb
 from . import flexure
+from .cantilever import design_parapet
 from .column import ColumnSection, design_column, interaction_curve, rect_bar_layout
-from .footing import design_isolated_footing
+from .footing import design_combined_footing, design_isolated_footing
 from .slab import design_one_way_slab, design_two_way_slab
 from .beam import design_beam
 
@@ -539,6 +540,9 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                     wall_thickness_m: float = 0.23,
                     seismic_detailing: bool | None = None,
                     apply_ll_reduction: bool = False,
+                    parapet_height_m: float | None = None,
+                    oh_tank_capacity_litres: float | None = None,
+                    edge_setback_m: float | None = None,
                     figures_dir: str | None = None) -> dict:
     """Design every unique element of a regular RC frame building.
 
@@ -547,6 +551,31 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     kind into this directory, and returns their paths+captions in
     result["figures"]. Left None (default) to skip rendering entirely —
     matches every pre-existing caller/test exactly.
+
+    parapet_height_m / oh_tank_capacity_litres / edge_setback_m: PD-5 chain
+    integration, all None by default (no behaviour change for existing
+    callers who don't pass them):
+    - parapet_height_m: when set, designs a roof-level RC parapet wall
+      (IS 875-2 minimum 0.75 kN/m lateral barrier load) and reports it under
+      result["parapet"]. Informational/report-only — does not feed into the
+      roof slab/column/seismic load chain (a parapet's own self-weight is
+      negligible against the frame; only its lateral demand is of interest,
+      and that demand is a standalone barrier-load check on the parapet
+      wall itself, not a lateral action on the building frame).
+    - oh_tank_capacity_litres: when set, estimates an overhead tank's total
+      weight (water + ~18% structure allowance) and adds it to the roof-
+      level seismic weight and to a representative roof-supporting column's
+      axial load (see the "OH-tank" comments below for exactly which column
+      kind and why). Does not design the tank's own walls/base — tank.py
+      has no such function; see design/tank.py module docstring.
+    - edge_setback_m: when set, detects edge/corner columns whose isolated
+      footing would project past this distance from the column grid line,
+      and computes a full two-column combined footing (design_combined_footing)
+      for that case, reported under result["combined_footings"] alongside a
+      violations[] entry (the isolated footing entry in result["footings"]
+      is left as-is — combined_footings is additive/supplementary, not a
+      replacement, so BOQ quantities/all existing "footings" consumers are
+      unaffected; see PD-5 report for the reasoning).
     """
     nx_bays, ny_bays = len(x_spacings_m), len(y_spacings_m)
     if nx_bays < 1 or ny_bays < 1 or storeys < 1:
@@ -640,6 +669,25 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     slab_dl = slab_D / 1000.0 * tables.UNIT_WEIGHTS["rcc"] + finish_kn_m2
     w_floor_service = slab_dl + il                       # kN/m2
 
+    # ---------------- OH tank (roof-level weight only) ----------------
+    # tank.py has no top-level "design a complete tank" function (only
+    # circular_tank_forces / rectangular_wall_forces / uplift_check /
+    # design_tank_wall_section pieces) -- this integration is deliberately
+    # scoped to "its weight reaches the roof-level load chain", not a full
+    # tank structural design (see PD-5 report).
+    OH_TANK_STRUCTURE_FACTOR = 1.18  # water weight + ~18% RC structure allowance
+    oh_tank_weight_kN = 0.0
+    if oh_tank_capacity_litres is not None:
+        water_weight_kN = (oh_tank_capacity_litres / 1000.0) * tables.UNIT_WEIGHTS["water"]
+        oh_tank_weight_kN = water_weight_kN * OH_TANK_STRUCTURE_FACTOR
+        assumptions.append(
+            f"OH tank ({oh_tank_capacity_litres:.0f} litres): estimated total "
+            f"weight {oh_tank_weight_kN:.1f} kN (water {water_weight_kN:.1f} kN "
+            f"x {OH_TANK_STRUCTURE_FACTOR:.2f} structure-allowance factor) added "
+            "to the roof-level seismic weight and to a representative roof-"
+            "supporting column's axial load; the tank's own walls/base are "
+            "NOT designed by this model")
+
     # ---------------- lateral loads ----------------
     # Computed before the beam loop (it moved up from below the beams in the
     # gravity-only version) because beams now need the portal frame moment to
@@ -648,6 +696,10 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     storey_weights = [ld.seismic_weight(floor_dead, il * area, il,
                                         is_roof=(k == storeys - 1))
                      for k in range(storeys)]
+    if oh_tank_weight_kN > 0.0:
+        # roof storey only (grep confirms is_roof=True is the last entry) —
+        # other storeys' weights are untouched.
+        storey_weights[-1] += oh_tank_weight_kN
     heights = [(k + 1) * storey_height_m for k in range(storeys)]
     R_seismic = 5.0 if seismic_detailing else 3.0
     # cl 7.6.2 masonry-infill formula (0.09h/sqrt(d)), computed once per
@@ -875,6 +927,19 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     counts = {"interior": n_int, "edge": n_edge, "corner": n_corner}
     col_h_mm = storey_height_m * 1000
 
+    # OH-tank roof-level column load: attributed to a single representative
+    # roof-supporting column KIND (interior columns are the typical location
+    # for an overhead tank/staircase head -- most central, shortest span to
+    # the tank's own support beams; fall back to edge, then corner, for
+    # small/single-bay grids where no interior column exists), split evenly
+    # across that kind's column COUNT. This is a roof-only addition (applied
+    # once, not multiplied by storeys like the rest of P_D below), consistent
+    # with "OH tank sits on the roof" rather than every floor.
+    oh_tank_kind = next((k for k in ("interior", "edge", "corner")
+                        if counts.get(k, 0) > 0), None)
+    oh_tank_kN_per_column = (oh_tank_weight_kN / counts[oh_tank_kind]
+                             if oh_tank_kind and oh_tank_weight_kN > 0.0 else 0.0)
+
     intersections = {"interior": [], "edge": [], "corner": []}
     for i in range(nx_bays + 1):
         for j in range(ny_bays + 1):
@@ -898,6 +963,8 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         # P_D + P_IL == P_service exactly, so the gravity combo 1.5(DL+IL)
         # still reproduces the previous 1.5*P_service to the last bit.
         P_D = (slab_dl * at + wall_kn_m * (tx + ty) / 2) * storeys
+        if kind == oh_tank_kind:
+            P_D += oh_tank_kN_per_column
         P_IL = il * at * storeys
         P_IL_unreduced = P_IL  # save for later comparison/reporting if needed
         # Apply IS 875-2 cl 3.2 live-load reduction if enabled and occupancy allows
@@ -1004,6 +1071,74 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         if figures_dir and fd.get("ok") and "q_min_service_kPa" in fd.get("data", {}):
             _render_footing_figure(kind, fd, col["count"], figures_dir, figures)
 
+    # ---------------- combined-footing detection (edge_setback_m) ----------
+    # Detects when an edge/corner column's isolated footing would project
+    # past the plot boundary (half its plan length > edge_setback_m from the
+    # column grid line) and, when triggered, ALSO runs a full two-column
+    # combined-footing design (design_combined_footing() already exists in
+    # footing.py -- confirmed present, contrary to the task brief's
+    # from-memory claim that no such function exists; see PD-5 report).
+    #
+    # Scope decision: the combined-footing result is attached under the new
+    # result["combined_footings"] key (supplementary/informational) rather
+    # than replacing the entry in result["footings"] -- this building model
+    # designs one representative footing per column KIND (interior/edge/
+    # corner), not per grid intersection, so "replacing" the isolated
+    # footing would silently apply a combined-footing section to every
+    # column of that kind (including ones nowhere near the plot boundary),
+    # and would also require reworking the BOQ/quantities aggregation (which
+    # assumes every footings[kind] entry is an isolated-footing shape) --
+    # out of scope for the M budget. The isolated footings[kind] entry is
+    # therefore left exactly as-is; combined_footings is additive.
+    combined_footings: dict = {}
+    combined_footing_violations: list = []
+    if edge_setback_m is not None:
+        # nearest-neighbour spacing for the combined-footing beam span: the
+        # first bay in whichever direction is tighter is used as a
+        # conservative (shorter, hence stiffer-moment) representative
+        # spacing -- this model has no per-intersection bay bookkeeping for
+        # edge/corner footings, only kind-level aggregates.
+        neighbour_spacing_m = min(x_spacings_m[0], y_spacings_m[0])
+        for kind in ("corner", "edge"):
+            if kind not in footings:
+                continue
+            fd = footings[kind]
+            L_m = fd.get("data", {}).get("L_m")
+            if L_m is None:
+                continue
+            half_L_m = L_m / 2.0
+            if half_L_m <= edge_setback_m:
+                continue
+            combined_footing_violations.append(_violation(
+                member_type="footing", axis=None,
+                grid_ref=f"footing class {kind}", span_m=None,
+                check=(f"isolated footing L/2 <= edge_setback_m (would "
+                       "project past the plot boundary) -- combined "
+                       "footing computed, see result['combined_footings']"),
+                actual=half_L_m, limit=edge_setback_m, unit="m",
+                remedy_hint="review_inputs"))
+            fallback_kind = "edge" if kind == "corner" else "corner"
+            neighbour_kind = "interior" if "interior" in columns else (
+                fallback_kind if fallback_kind in columns else None)
+            col_a, col_b_ = columns[kind], columns.get(neighbour_kind, columns[kind])
+            cf = design_combined_footing(
+                P1_kN=col_a["P_service_kN"], P2_kN=col_b_["P_service_kN"],
+                spacing_m=neighbour_spacing_m, sbc_kpa=sbc_kpa,
+                col1_mm=col_a["b_mm"], col2_mm=col_b_["b_mm"],
+                fck=fck, fy=fy, edge_limit_m=edge_setback_m)
+            cf.pop("x", None); cf.pop("V", None); cf.pop("M", None)  # numpy arrays, not JSON-safe
+            cf["paired_kind"] = neighbour_kind or kind
+            cf["spacing_assumption_m"] = neighbour_spacing_m
+            combined_footings[kind] = cf
+        if combined_footings:
+            assumptions.append(
+                "combined footing(s) computed for edge/corner column kind(s) "
+                f"{sorted(combined_footings)} whose isolated footing would "
+                f"exceed edge_setback_m={edge_setback_m:.2f} m -- see "
+                "result['combined_footings']; the isolated footings[] entry "
+                "for that kind is left unchanged (informational, not a "
+                "replacement -- see design_building() docstring)")
+
     # ---------------- quantities (BOQ-shaped) ----------------
     def slab_steel(p):
         if p["type"] == "one-way":
@@ -1071,6 +1206,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
 
     violations = _collect_violations(panels, beams, columns, footings, sbc_kpa)
     violations += uplift_violations
+    violations += combined_footing_violations
     if fck < exp["min_fck"]:
         # Building-level, not per-member — no existing member_type="building"
         # (or equivalent whole-building-scope) convention found elsewhere in
@@ -1089,7 +1225,18 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
             "it -- that beam's crack control relies on the deemed-to-satisfy "
             "route, not the explicit number")
 
-    return {
+    # ---------------- parapet (roof-level only, report-only) ----------------
+    parapet_result = None
+    if parapet_height_m is not None:
+        pr = design_parapet(height_m=parapet_height_m)
+        parapet_result = {"ok": pr.ok, "checks": pr.checks, "data": pr.data}
+        assumptions.append(
+            f"roof-level parapet ({parapet_height_m:.2f} m high) designed for "
+            "the IS 875-2 minimum 0.75 kN/m lateral barrier load -- "
+            "result['parapet']; report-only, does not feed into the roof "
+            "slab/column/seismic load chain (see design_building() docstring)")
+
+    result = {
         "ok": all_checks_ok,
         "inputs": {"grid_x_m": x_spacings_m, "grid_y_m": y_spacings_m,
                    "storeys": storeys, "storey_height_m": storey_height_m,
@@ -1118,6 +1265,19 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         "violations": violations,
         "figures": figures,
     }
+    if parapet_result is not None:
+        result["parapet"] = parapet_result
+    if oh_tank_capacity_litres is not None:
+        result["oh_tank"] = {
+            "capacity_litres": oh_tank_capacity_litres,
+            "estimated_weight_kN": round(oh_tank_weight_kN, 2),
+            "structure_allowance_factor": OH_TANK_STRUCTURE_FACTOR,
+            "supporting_column_kind": oh_tank_kind,
+            "load_per_column_kN": round(oh_tank_kN_per_column, 2),
+        }
+    if combined_footings:
+        result["combined_footings"] = combined_footings
+    return result
 
 
 def building_report_pdf(result: dict, path: str = "out/building_report.pdf",
