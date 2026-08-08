@@ -26,12 +26,35 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
                 b: float, D: float, fck: float, fy: float,
                 support: str = "ss", point_loads=None,
                 cover: float = 30, bar_dia: float = 20,
-                stirrup_dia: float = 8, seismic: bool = False) -> dict:
+                stirrup_dia: float = 8, seismic: bool = False,
+                Mu_span_override_kNm: float | None = None,
+                Mu_support_override_kNm: float | None = None,
+                Vu_override_kN: float | None = None) -> dict:
     """Design a single-span rectangular RC beam.
 
     b, D, cover, bar_dia, stirrup_dia in mm; loads in kN/m and (P_kN, a_m).
     Returns a dict: inputs, analysis (x,V,M arrays), design summary,
     checks list [(name, ok)], and overall ok flag.
+
+    Continuous-member mode (IS 456 cl 22.5.1 / Tables 12-13)
+    --------------------------------------------------------
+    Supplying ``Mu_span_override_kNm`` and/or ``Mu_support_override_kNm``
+    switches the section design from "one envelope moment, one reinforcement
+    layer" to a genuine two-face design: **bottom** steel sized for the
+    sagging span moment and **top** steel sized for the hogging support
+    moment, each run through the same singly/doubly logic against ``Mlim``.
+    ``Vu_override_kN`` likewise replaces the analysis-derived shear.
+
+    The overrides are design *actions*, not loads — the caller has already
+    factored them (the building chain passes
+    ``continuous_moments(1.5*w_dl, 1.5*w_il, L)`` results). The internal
+    ``analyze()`` call still runs so the returned SFD/BMD arrays remain
+    available for plotting, but its moments no longer drive the section.
+
+    With no overrides the behaviour, the returned key set and every computed
+    value are bit-for-bit identical to the pre-existing single-layer design
+    (the frozen ``/v1/calc/beam`` contract) — the ``top_steel``/``continuous``
+    keys are added only in override mode.
     """
     # ---- factored loads (1.5(DL+IL), cl combos gravity) -------------------
     w_u = 1.5 * (w_dl_kn_m + w_il_kn_m)
@@ -44,10 +67,27 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
 
     Mu_pos = float(M.max())          # kN.m sagging
     Mu_neg = float(M.min())          # kN.m hogging
-    Mu_max_kNm = max(abs(Mu_pos), abs(Mu_neg))
     Vu_max_kN = float(max(abs(V.max()), abs(V.min())))
 
-    Mu = Mu_max_kNm * 1e6            # N.mm
+    # ---- continuous-member overrides (IS 456 cl 22.5.1) -------------------
+    continuous = (Mu_span_override_kNm is not None
+                  or Mu_support_override_kNm is not None)
+    if Mu_span_override_kNm is not None:
+        Mu_pos = abs(float(Mu_span_override_kNm))       # sagging, bottom face
+    if Mu_support_override_kNm is not None:
+        Mu_neg = -abs(float(Mu_support_override_kNm))   # hogging, top face
+    if Vu_override_kN is not None:
+        Vu_max_kN = abs(float(Vu_override_kN))
+
+    Mu_max_kNm = max(abs(Mu_pos), abs(Mu_neg))
+
+    # Bottom (tension-face) design moment. In single-layer mode this is the
+    # whole envelope, exactly as before; in continuous mode the hogging
+    # moment is carried by its own top layer instead of inflating the bottom.
+    Mu_bottom_kNm = abs(Mu_pos) if continuous else Mu_max_kNm
+    Mu_top_kNm = abs(Mu_neg) if continuous else 0.0
+
+    Mu = Mu_bottom_kNm * 1e6         # N.mm
     Vu = Vu_max_kN * 1e3            # N
 
     # ---- effective depth --------------------------------------------------
@@ -56,14 +96,17 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
 
     # ---- flexure ----------------------------------------------------------
     Mlim = flexure.mu_lim(b, d, fck, fy)
+
+    def _layer(Mu_Nmm: float) -> tuple[float, float, bool]:
+        """Ast, Asc, doubly? for one face at one design moment."""
+        if Mu_Nmm > Mlim:
+            dd = flexure.design_doubly(Mu_Nmm, b, d, dc, fck, fy)
+            return dd["Ast"], dd["Asc"], True
+        return (flexure.ast_singly(Mu_Nmm, b, d, fck, fy, raise_on_over=False),
+                0.0, False)
+
     doubly = Mu > Mlim
-    if doubly:
-        dd = flexure.design_doubly(Mu, b, d, dc, fck, fy)
-        Ast_reqd = dd["Ast"]
-        Asc_reqd = dd["Asc"]
-    else:
-        Ast_reqd = flexure.ast_singly(Mu, b, d, fck, fy, raise_on_over=False)
-        Asc_reqd = 0.0
+    Ast_reqd, Asc_reqd, _ = _layer(Mu)
 
     Ast_min = flexure.min_steel(b, d, fy)
     if seismic:
@@ -71,6 +114,19 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
         Ast_min = max(Ast_min, Ast_min_ductile)
     Ast_max = flexure.max_steel(b, D)
     Ast_reqd = max(Ast_reqd, Ast_min)
+
+    # ---- top (hogging) layer, continuous members only ---------------------
+    Ast_top_reqd = Asc_top_reqd = 0.0
+    doubly_top = False
+    if continuous:
+        Ast_top_reqd, Asc_top_reqd, doubly_top = _layer(Mu_top_kNm * 1e6)
+        Ast_top_reqd = max(Ast_top_reqd, Ast_min)
+        if seismic:
+            # IS 13920:2016 cl 6.2.3 — the positive (bottom) steel at a joint
+            # face shall be at least half the negative (top) steel there.
+            # This model carries one bottom layer for the whole span, so the
+            # requirement is enforced on that layer (conservative).
+            Ast_reqd = max(Ast_reqd, 0.5 * Ast_top_reqd)
 
     # ---- bar selection (tension) -----------------------------------------
     area_bar = math.pi * bar_dia ** 2 / 4.0
@@ -82,6 +138,15 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
     if Asc_reqd > 0:
         n_bars_c = max(2, math.ceil(Asc_reqd / area_bar))
         Asc_prov = n_bars_c * area_bar
+
+    n_bars_top = n_bars_top_c = 0
+    Ast_top_prov = Asc_top_prov = 0.0
+    if continuous:
+        n_bars_top = max(2, math.ceil(Ast_top_reqd / area_bar))
+        Ast_top_prov = n_bars_top * area_bar
+        if Asc_top_reqd > 0:
+            n_bars_top_c = max(2, math.ceil(Asc_top_reqd / area_bar))
+            Asc_top_prov = n_bars_top_c * area_bar
 
     pt = 100.0 * Ast_prov / (b * d)
 
@@ -126,15 +191,31 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
                                 pc=100.0 * Asc_prov / (b * d))
 
     # ---- checks -----------------------------------------------------------
-    Mu_capacity = (flexure.mu_capacity(Ast_prov, b, d, fck, fy)
-                   + (Asc_prov * (tables.fsc(fy, dc / d) - 0.446 * fck)
-                      * (d - dc) if doubly else 0.0))
+    def _capacity(Ast_p: float, Asc_p: float, dbl: bool) -> float:
+        return (flexure.mu_capacity(Ast_p, b, d, fck, fy)
+                + (Asc_p * (tables.fsc(fy, dc / d) - 0.446 * fck)
+                   * (d - dc) if dbl else 0.0))
+
+    Mu_capacity = _capacity(Ast_prov, Asc_prov, doubly)
     checks = []
     checks.append(("flexure Ast >= Ast_min (cl 26.5.1.1a)", Ast_prov >= Ast_min))
     checks.append(("flexure Ast <= Ast_max (cl 26.5.1.1b)", Ast_prov <= Ast_max))
     checks.append(("moment capacity >= Mu", Mu_capacity >= Mu * 0.999))
     checks.append(("shear (cl 40)", stirrups["ok"]))
     checks.append(("deflection L/d (cl 23.2.1)", defl["ok"]))
+
+    if continuous:
+        # Additive, continuous-only: the frozen single-layer /v1/calc/beam
+        # check-name list is untouched when no override is supplied.
+        checks.append(("top steel Ast <= Ast_max (cl 26.5.1.1b)",
+                       Ast_top_prov <= Ast_max))
+        checks.append(("hogging moment capacity >= Mu_support (cl 22.5.1)",
+                       _capacity(Ast_top_prov, Asc_top_prov, doubly_top)
+                       >= Mu_top_kNm * 1e6 * 0.999))
+        if seismic:
+            checks.append(("IS 13920 bottom steel >= 0.5 x top steel at joint "
+                           "face (cl 6.2.3)",
+                           Ast_prov >= 0.5 * Ast_top_prov - 1e-6))
 
     side_face = D > 750.0
     if side_face:
@@ -184,6 +265,28 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
     if ductile_stirrups is not None:
         # additive, seismic-only (keeps the frozen non-seismic v1 key set intact)
         summary["ductile_stirrups"] = ductile_stirrups
+    if continuous:
+        # additive, continuous-only (same reason). "Ast_*"/"n_bars" at the top
+        # level remain the bottom/sagging layer, so every existing consumer
+        # keeps reading exactly what it read before.
+        summary["continuous"] = True
+        summary["top_steel"] = {
+            "Mu_hogging_kNm": Mu_top_kNm,
+            "Ast_reqd_mm2": Ast_top_reqd,
+            "Ast_prov_mm2": Ast_top_prov,
+            "n_bars": n_bars_top,
+            "bar_dia": bar_dia,
+            "doubly_reinforced": doubly_top,
+            # compression steel for the hogging layer sits at the *bottom*
+            # face at the support (continuing bottom bars, cl 26.5.1)
+            "Asc_reqd_mm2": Asc_top_reqd,
+            "Asc_prov_mm2": Asc_top_prov,
+            "n_bars_comp": n_bars_top_c,
+            "pt_percent": 100.0 * Ast_top_prov / (b * d),
+            "Mu_capacity_kNm": _capacity(Ast_top_prov, Asc_top_prov,
+                                         doubly_top) / 1e6,
+        }
+        summary["bottom_steel_Mu_kNm"] = Mu_bottom_kNm
 
     return {
         "inputs": {"span_m": span_m, "w_dl_kn_m": w_dl_kn_m,
