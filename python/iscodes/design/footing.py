@@ -59,13 +59,23 @@ def _bar_for_strip(ast_per_m: float, dias=(8, 10, 12, 16, 20, 25),
 
 def safe_bearing_capacity(c_kpa: float, phi_deg: float, gamma: float = 18.0,
                           B: float = 1.5, L: float = 1.5, Df: float = 1.5,
-                          FOS: float = 2.5, water_table: str = "deep") -> dict:
+                          FOS: float | None = None,
+                          load_tested: bool = False,
+                          water_table: str = "deep") -> dict:
     """Net safe bearing capacity per IS 6403 general shear equation.
 
     qu_net = c Nc sc dc + q(Nq-1) sq dq + 0.5 gamma B Ngamma sgamma W'
     with q = gamma * Df (effective overburden). Returns qu_net and q_safe
     (kPa). Shape (cl 5.1.1 rect), depth and water-table factors as flagged.
+
+    FOS: if not given, resolved from `load_tested` — IS 6403:1981 standard
+    practice is FOS = 3.0 for a normal (non-load-tested) site
+    investigation, and FOS = 2.5 only when the bearing capacity has been
+    confirmed by an actual plate load test. An explicit `FOS=` always wins
+    over `load_tested`.
     """
+    if FOS is None:
+        FOS = 2.5 if load_tested else 3.0
     f = tables.bearing_capacity_factors(phi_deg)
     Nc, Nq, Ng = f["Nc"], f["Nq"], f["Ngamma"]
     q = gamma * Df
@@ -93,6 +103,7 @@ def safe_bearing_capacity(c_kpa: float, phi_deg: float, gamma: float = 18.0,
     return {"qu_net": qu_net, "q_safe": q_safe,
             "Nc": Nc, "Nq": Nq, "Ngamma": Ng,
             "sc": sc, "sq": sq, "sgamma": sg, "dc": dc, "dq": dq, "W_prime": Wd,
+            "FOS_used": FOS, "load_tested": load_tested,
             "note": "IS 6403:1981 general shear; net values (surcharge removed)."}
 
 

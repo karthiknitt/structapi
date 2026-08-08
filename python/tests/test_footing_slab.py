@@ -16,6 +16,33 @@ def test_sbc_phi30_hand_check():
     assert 150 <= r["q_safe"] <= 400
 
 
+def test_sbc_default_fos_is_3():
+    r_default = footing.safe_bearing_capacity(c_kpa=0, phi_deg=30, gamma=18,
+                                               B=2, L=2, Df=1.5)
+    r_explicit = footing.safe_bearing_capacity(c_kpa=0, phi_deg=30, gamma=18,
+                                                B=2, L=2, Df=1.5, FOS=3.0)
+    assert r_default["FOS_used"] == 3.0
+    assert r_default["load_tested"] is False
+    assert r_default["q_safe"] == pytest.approx(r_default["qu_net"] / 3.0)
+    assert r_default["q_safe"] == pytest.approx(r_explicit["q_safe"])
+
+
+def test_sbc_load_tested_fos_is_2_5():
+    r = footing.safe_bearing_capacity(c_kpa=0, phi_deg=30, gamma=18,
+                                      B=2, L=2, Df=1.5, load_tested=True)
+    assert r["FOS_used"] == 2.5
+    assert r["load_tested"] is True
+    assert r["q_safe"] == pytest.approx(r["qu_net"] / 2.5)
+
+
+def test_sbc_explicit_fos_wins_over_load_tested():
+    r = footing.safe_bearing_capacity(c_kpa=0, phi_deg=30, gamma=18,
+                                      B=2, L=2, Df=1.5,
+                                      load_tested=True, FOS=4.0)
+    assert r["FOS_used"] == 4.0
+    assert r["q_safe"] == pytest.approx(r["qu_net"] / 4.0)
+
+
 def test_isolated_footing_textbook():
     r = footing.design_isolated_footing(P_service_kN=1000, M_service_kNm=0,
                                         sbc_kpa=200, col_b_mm=400,

@@ -23,6 +23,28 @@ def test_all_elements_pass(ref):
     assert ref["ok"], {k: v.get("ok") for k, v in ref["columns"].items()}
 
 
+def test_sbc_kpa_defaults_to_150_when_omitted():
+    r = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        fck=25, fy=500)
+    assert r["inputs"]["sbc_kpa"] == 150.0
+    assert any("sbc_kpa not provided" in a for a in r["assumptions"])
+
+
+def test_sbc_kpa_explicit_value_used_unchanged():
+    r = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200.0, fck=25, fy=500)
+    assert r["inputs"]["sbc_kpa"] == 200.0
+    assert not any("sbc_kpa not provided" in a for a in r["assumptions"])
+
+
 def test_column_load_takedown_ballpark(ref):
     # interior column: trib 4.0 x 4.5 = 18 m2; w_floor ~ (D/1000*25+1.5+2) kN/m2
     col = ref["columns"]["interior"]
