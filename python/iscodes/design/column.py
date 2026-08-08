@@ -242,10 +242,45 @@ def design_column(b: float, D: float, fck: float, fy: float,
     if seismic:
         checks.append(("min width 300 for >2 storey support (IS 13920 cl 7.1)",
                        min(b, D) >= tables.DUCTILE["column_min_b_storeys"]))
+        # cl 7.4.1 -- length of the special confining zone from each joint face
         lo = max(max(b, D), L / 6, 450.0)
-        s_conf = rounding.site_spacing(
-            min(tables.DUCTILE["confine_spacing_max"],
-                tables.DUCTILE["confine_spacing_6db"] * bar_dia))
-        data.update(confine_length_lo=lo, confine_spacing_max=s_conf)
+        # cl 7.4.6 -- hoop pitch in lo: smallest of min(b,D)/4, 6*dia_smallest
+        # and 100 mm, but need not be taken less than 75 mm.
+        s_conf_limit = max(min(min(b, D) / 4.0,
+                               tables.DUCTILE["confine_spacing_6db"] * bar_dia,
+                               tables.DUCTILE["confine_spacing_max"]), 75.0)
+        s_conf = rounding.site_spacing(s_conf_limit)
+
+        # cl 7.4.8 -- area of the bar forming the rectangular confining hoop.
+        # h = longer dimension of the hoop measured to its outer face, which
+        # the clause requires to be <= 300 mm; where the core exceeds 300 mm
+        # crossties are provided, splitting it into equal segments.
+        core_long = max(max(b, D) - 2 * cover, 0.0)
+        core_short = max(min(b, D) - 2 * cover, 0.0)
+        n_seg = max(1, math.ceil(core_long / 300.0)) if core_long > 0 else 1
+        h_hoop = core_long / n_seg
+        Ak = core_long * core_short          # confined core, to hoop outer face
+        if Ak > 0:
+            Ash_req = max(0.18 * s_conf * h_hoop * (fck / fy) * (Ag / Ak - 1.0),
+                          0.05 * s_conf * h_hoop * (fck / fy))
+        else:
+            Ash_req = float("inf")
+        Ash_prov = math.pi * tie_dia ** 2 / 4.0
+        data.update(confine_length_lo=lo, confine_spacing_max=s_conf,
+                    confine_spacing_limit=s_conf_limit,
+                    confine_hoop_dia_mm=tie_dia,
+                    confine_hoop_h_mm=h_hoop,
+                    confine_core_Ak_mm2=Ak,
+                    confine_crossties_required=n_seg > 1,
+                    confine_hoop_segments=n_seg,
+                    Ash_required_mm2=Ash_req,
+                    Ash_provided_mm2=Ash_prov,
+                    confine_hook="135 deg bend, extend 10*dia beyond bend, "
+                                 "closed hoop")
+        checks.append(("IS 13920 confining hoop spacing <= "
+                       "min(min(b,D)/4, 6*dia, 100) (cl 7.4.6)",
+                       0 < s_conf <= s_conf_limit))
+        checks.append(("IS 13920 confining hoop Ash >= required (cl 7.4.8)",
+                       Ash_prov >= Ash_req))
 
     return ColumnCheck(all(ok for _, ok in checks), checks, data)

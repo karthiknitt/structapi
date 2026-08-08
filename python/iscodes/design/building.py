@@ -319,6 +319,18 @@ def _beam_violations(key: tuple, bm: dict) -> list:
                                   d["pt_percent"] / 100.0,
                                   tables.DUCTILE["beam_max_pt"], "ratio",
                                   "add_grid_line"))
+        elif name.startswith("IS 13920 confining-zone"):
+            ds = d.get("ductile_stirrups", {})
+            out.append(_violation("beam", direction, grid_ref, span, name,
+                                  ds.get("confining_zone_spacing_mm"),
+                                  ds.get("confining_zone_spacing_limit_mm"),
+                                  "mm", "review_inputs"))
+        elif name.startswith("IS 13920 span-zone"):
+            ds = d.get("ductile_stirrups", {})
+            out.append(_violation("beam", direction, grid_ref, span, name,
+                                  ds.get("span_zone_spacing_mm"),
+                                  ds.get("span_zone_spacing_limit_mm"),
+                                  "mm", "review_inputs"))
         else:
             out.append(_violation("beam", direction, grid_ref, span, name,
                                   None, None, "", "review_inputs"))
@@ -356,6 +368,20 @@ def _column_violations(kind: str, col: dict) -> list:
             out.append(_violation("column", None, grid_ref, None, name,
                                   data.get("tie_dia"), data.get("tie_dia_min"),
                                   "mm", "review_inputs"))
+        elif name.startswith("IS 13920 confining hoop Ash"):
+            # Ash falls as Ag/Ak -> 1, i.e. as the section grows relative to
+            # its cover; a bigger section is the solver-actionable remedy.
+            # demand/capacity orientation (like "moment capacity >= Mu"):
+            # actual = Ash required, limit = Ash provided by the hoop bar.
+            out.append(_violation("column", None, grid_ref, None, name,
+                                  data.get("Ash_required_mm2"),
+                                  data.get("Ash_provided_mm2"), "mm2",
+                                  "increase_section"))
+        elif name.startswith("IS 13920 confining hoop spacing"):
+            out.append(_violation("column", None, grid_ref, None, name,
+                                  data.get("confine_spacing_max"),
+                                  data.get("confine_spacing_limit"), "mm",
+                                  "review_inputs"))
         elif name.startswith("min width 300"):
             out.append(_violation("column", None, grid_ref, None, name,
                                   min(col["b_mm"], col["D_mm"]),

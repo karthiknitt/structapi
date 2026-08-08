@@ -212,6 +212,93 @@ def test_ductile_beam_min_steel_is13920():
                    for name in check_names_non_seismic)
 
 
+def test_ductile_beam_two_zone_stirrups_worked_example():
+    """IS 13920:2016 cl 6.3.5 two-zone hoop schedule — hand-worked example.
+
+    G+1 residential seismic beam, M25 / Fe500:
+        b = 300, D = 500, cover 30, 20 dia main bars, 8 dia hoops
+        d  = 500 - 30 - 8 - 20/2                       = 452 mm
+        confining zone length  = 2d                    = 904 mm
+        confining pitch limit  = max(min(d/4, 8*20), 100)
+                               = max(min(113.0, 160.0), 100) = 113.0 mm
+                               -> Site-Standard 25 floor          = 100 mm
+        span-zone pitch limit  = d/2 = 226 mm -> floor            = 225 mm
+    Loads are light enough that IS 456 shear gives sv = 300 mm (the cl 26.5.1.6
+    cap), so the ductile limits govern in both zones.
+    """
+    b, D, fck, fy = 300.0, 500.0, 25.0, 500.0
+    cover, bar_dia, stirrup_dia = 30.0, 20.0, 8.0
+    d_hand = D - cover - stirrup_dia - bar_dia / 2.0
+    assert d_hand == 452.0
+
+    r = beamdesign.design_beam(span_m=4.0, w_dl_kn_m=12.0, w_il_kn_m=8.0,
+                               b=b, D=D, fck=fck, fy=fy, support="ss",
+                               cover=cover, bar_dia=bar_dia,
+                               stirrup_dia=stirrup_dia, seismic=True)
+    ds = r["design"]["ductile_stirrups"]
+    assert r["design"]["d_mm"] == pytest.approx(d_hand)
+    # shear design is untouched and does not govern here
+    assert r["design"]["stirrups"]["sv_provided"] == 300.0
+
+    # hand-computed limits
+    assert ds["confining_zone_length_mm"] == pytest.approx(904.0)
+    assert ds["confining_zone_spacing_limit_mm"] == pytest.approx(113.0)
+    assert ds["span_zone_spacing_limit_mm"] == pytest.approx(226.0)
+    # hand-computed provided (Site-Standard 25) spacings
+    assert ds["confining_zone_spacing_mm"] == 100.0
+    assert ds["span_zone_spacing_mm"] == 225.0
+    assert ds["first_stirrup_offset_mm"] == 50.0
+    assert ds["hook"] == "135 deg bend, extend 10*dia beyond bend, closed hoop"
+
+    # zone relationships and code caps
+    assert ds["confining_zone_spacing_mm"] <= ds["span_zone_spacing_mm"]
+    assert ds["confining_zone_spacing_mm"] <= max(
+        min(d_hand / 4.0, 8.0 * bar_dia), 100.0)
+    assert ds["span_zone_spacing_mm"] <= d_hand / 2.0
+    # Site-Standard 25
+    assert ds["confining_zone_spacing_mm"] % 25 == 0
+    assert ds["span_zone_spacing_mm"] % 25 == 0
+
+    names = [n for n, _ in r["checks"]]
+    assert any("cl 6.3.5" in n and "confining-zone" in n for n in names)
+    assert any("cl 6.3.5" in n and "span-zone" in n for n in names)
+    assert all(ok for n, ok in r["checks"] if "cl 6.3.5" in n)
+    # stale clause citation fixed (cl 6.1.1, not 6.1.3)
+    assert any("cl 6.1.1" in n for n in names)
+    assert not any("cl 6.1.3" in n for n in names)
+
+
+def test_ductile_beam_shear_spacing_governs_over_ductile_cap():
+    """Where IS 456 shear demands a tighter pitch than IS 13920, shear wins.
+
+    Deep, heavily loaded beam: d = 700 - 30 - 8 - 12.5 = 649.5 mm, so the
+    ductile span-zone limit is d/2 = 324.75 -> 300 mm, but designed shear
+    (cl 40.4) forces a much tighter pitch, which must carry into both zones.
+    """
+    r = beamdesign.design_beam(span_m=7.0, w_dl_kn_m=60.0, w_il_kn_m=40.0,
+                               b=300, D=700, fck=25, fy=500, support="ss",
+                               cover=30, bar_dia=25, stirrup_dia=8,
+                               seismic=True)
+    sv = r["design"]["stirrups"]["sv_provided"]
+    ds = r["design"]["ductile_stirrups"]
+    assert 0 < sv < 100.0, sv           # shear-governed, tighter than 100 mm
+    assert ds["confining_zone_spacing_mm"] == sv
+    assert ds["span_zone_spacing_mm"] == sv
+    assert ds["confining_zone_spacing_mm"] % 25 == 0
+    assert ds["span_zone_spacing_mm"] % 25 == 0
+
+
+def test_ductile_beam_stirrups_absent_when_not_seismic():
+    """Non-seismic regression guard: no ductile field, no cl 6.3.5 checks."""
+    r = beamdesign.design_beam(span_m=4.0, w_dl_kn_m=12.0, w_il_kn_m=8.0,
+                               b=300, D=500, fck=25, fy=500, support="ss",
+                               cover=30, bar_dia=20, stirrup_dia=8,
+                               seismic=False)
+    assert "ductile_stirrups" not in r["design"]
+    assert "stirrups" in r["design"]          # existing field untouched
+    assert not any("cl 6.3.5" in n for n, _ in r["checks"])
+
+
 # ---------------------------------------------------------------------------
 # plotting.py
 # ---------------------------------------------------------------------------

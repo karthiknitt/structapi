@@ -500,9 +500,9 @@ def bearing_capacity_factors(phi_deg: float) -> dict:
 # ---------------------------------------------------------------------------
 
 DUCTILE = {
-    "beam_min_b": 200.0,           # mm, cl 6.1.3
+    "beam_min_b": 200.0,           # mm, cl 6.1.1
     "beam_max_pt": 0.025,          # cl 6.2.2
     "column_min_b_storeys": 300.0, # mm, columns supporting > 2 storeys
-    "confine_spacing_max": 100.0,  # mm hoop spacing in lo, cl 8.1
+    "confine_spacing_max": 100.0,  # mm hoop spacing in lo, cl 7.4.6
     "confine_spacing_6db": 6.0,    # 6 x smallest long. bar dia
 }
