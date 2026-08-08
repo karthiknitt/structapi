@@ -144,3 +144,94 @@ def design_chajja(projection_m: float, thickness_root_mm: float,
     }
 
     return ChajjaResult(ok=all(o for _, o in checks), checks=checks, data=data)
+
+
+# ---------------------------------------------------------------------------
+# Parapet / handrail wall — vertical cantilever under a horizontal line load
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ParapetResult:
+    ok: bool
+    checks: list
+    data: dict = field(default_factory=dict)
+
+
+# IS 875 (Part 2):1987 requires parapet walls, balustrades and hand-rails to
+# be designed for a minimum horizontal (lateral) line load applied at coping/
+# hand-rail level, distinct from any wind pressure on the wall's own surface
+# area -- this is a barrier/impact-type provision (a person leaning on or
+# being pushed against the parapet), not a wind-pressure calculation.
+# 0.75 kN/m run is the figure commonly cited in Indian structural design
+# practice for this provision and matches the plan's number; verify the
+# exact clause/table against a current BIS copy of IS 875-2 before
+# professional use (this module does not have a machine-checkable citation
+# for the precise clause number, unlike the fully-verified cl 41.3.1/41.4.2
+# citations in design_chajja() above).
+PARAPET_MIN_LATERAL_KN_PER_M = 0.75
+
+
+def design_parapet(height_m: float = 1.0, thickness_mm: float = 150.0,
+                   fck: float = 20.0, fy: float = 415.0,
+                   lateral_kN_per_m: float = PARAPET_MIN_LATERAL_KN_PER_M,
+                   cover: float = 15.0, bar_dia: int = 8) -> ParapetResult:
+    """Design a solid RC parapet/handrail wall, 1 m length strip, as a
+    vertical cantilever fixed at the roof slab and loaded by a horizontal
+    line load applied at the free top edge (IS 875-2 minimum barrier load).
+
+    Structurally analogous to `design_chajja()` (a short RC cantilever
+    resisting a lateral/moment demand) but rotated 90 degrees: the cantilever
+    axis is vertical (height_m, fixed at the roof slab) and the load is
+    horizontal, applied at the free top edge rather than distributed along
+    a horizontal projection. The base moment is therefore a point-load
+    cantilever moment (W x height), not a UDL-on-projection moment.
+
+    `height_m` = parapet height above the roof slab (m).
+    `thickness_mm` = solid wall thickness (mm), 1 m length design strip.
+    `lateral_kN_per_m` = horizontal line load per metre RUN of parapet
+    (i.e. per metre of wall length, applied at the top), IS 875-2 minimum
+    barrier load -- override for a specific worse condition (impact load
+    on stadium/assembly-occupancy balustrades, for example).
+    """
+    checks: list = []
+
+    D = float(thickness_mm)
+    d = D - cover - bar_dia / 2.0
+
+    # ---- factored base actions (cantilever tip load) ----------------------
+    W = float(lateral_kN_per_m)
+    Mu = 1.5 * W * height_m           # kNm per m run, at the base
+    Vu = 1.5 * W                      # kN per m run, at the base
+
+    # ---- flexure at base, tension on the face the load pushes toward -----
+    base = _strip_design(Mu * 1e6, D, d, fck, fy, bar_dia, checks,
+                         "base (horizontal cantilever)")
+
+    # ---- distribution steel (cl 26.5.2.1) ----------------------------------
+    ast_dist = 0.0012 * 1000.0 * D
+    s_dist = _spacing_for(ast_dist, 8, min(5 * d, 450.0))
+    dist = {"Ast_req": ast_dist, "bar": f"8mm @ {s_dist:.0f} c/c"}
+
+    # ---- shear at base, cl 40.2.1.1 ----------------------------------------
+    tau_v = Vu * 1e3 / (1000.0 * d)
+    pt = 100.0 * base.get("Ast_prov", 0.0) / (1000.0 * d)
+    tau_allow = tables.k_solid_slab(D) * tables.tau_c(pt, fck)
+    checks.append(("shear tau_v <= k*tau_c (cl 40.2.1.1)", tau_v <= tau_allow))
+
+    # ---- deflection, cl 23.2.1 -- cantilever basic ratio (7, not 20/26) ---
+    ast_ratio = (base["Ast_req"] / base["Ast_prov"]) if base.get("Ast_prov") else 1.0
+    defl = svc.check_deflection(height_m * 1000.0, d, "cantilever",
+                                fy, max(pt, 0.1), ast_ratio)
+    checks.append(("deflection L/d <= 7 for cantilever (cl 23.2.1)", defl["ok"]))
+
+    data = {
+        "height_m": height_m, "thickness_mm": D, "d_mm": d,
+        "lateral_load_kN_per_m": W, "Mu_kNm": Mu, "Vu_kN": Vu,
+        "base_steel": base, "distribution": dist,
+        "tau_v": tau_v, "tau_allow": tau_allow, "deflection": defl,
+        "load_basis": ("IS 875 Part 2:1987 minimum horizontal barrier load "
+                       "for parapets/hand-rails, applied at top coping "
+                       "level -- distinct from wind pressure on the wall "
+                       "surface (not computed here)."),
+    }
+    return ParapetResult(ok=all(o for _, o in checks), checks=checks, data=data)

@@ -2,7 +2,7 @@
 
 import math
 
-from iscodes.design.cantilever import design_chajja
+from iscodes.design.cantilever import design_chajja, design_parapet
 
 
 def test_typical_chajja_uniform_thickness():
@@ -104,3 +104,51 @@ def test_deflection_uses_cantilever_basic_ratio():
     # the same span since only the cantilever base ratio applies.
     assert defl["allowable_L_by_d"] < 20.0
     assert defl["ok"]
+
+
+# ---------------------------------------------------------------------------
+# Parapet / handrail — IS 875-2 0.75 kN/m minimum lateral line load
+# ---------------------------------------------------------------------------
+
+def test_parapet_default_hand_computed_base_moment_shear():
+    """height 1.0 m, 0.75 kN/m default lateral load -- hand-verified Mu/Vu
+    for a point-load-at-tip vertical cantilever (M = W*h, V = W)."""
+    r = design_parapet()
+    W = 0.75
+    h = 1.0
+    Mu = 1.5 * W * h
+    Vu = 1.5 * W
+    assert math.isclose(r.data["Mu_kNm"], Mu, rel_tol=1e-9)
+    assert math.isclose(r.data["Vu_kN"], Vu, rel_tol=1e-9)
+    assert r.data["lateral_load_kN_per_m"] == 0.75
+    assert r.data["height_m"] == 1.0
+
+
+def test_parapet_taller_wall_scales_moment_linearly_with_height():
+    """M = W*h at the base of a point-tip-load cantilever -- moment is
+    linear in height for a fixed load, unlike a UDL cantilever (which is
+    quadratic in the span)."""
+    r1 = design_parapet(height_m=1.0, thickness_mm=200.0)
+    r2 = design_parapet(height_m=2.0, thickness_mm=200.0)
+    assert math.isclose(r2.data["Mu_kNm"], 2 * r1.data["Mu_kNm"], rel_tol=1e-9)
+    # Vu is independent of height (same tip load, same base shear)
+    assert math.isclose(r1.data["Vu_kN"], r2.data["Vu_kN"], rel_tol=1e-9)
+
+
+def test_parapet_ok_with_reasonable_section():
+    r = design_parapet(height_m=1.0, thickness_mm=150.0)
+    assert r.ok, r.checks
+    assert r.data["base_steel"]["Ast_prov"] >= r.data["base_steel"]["Ast_min"]
+    assert "distribution" in r.data
+
+
+def test_parapet_deflection_uses_cantilever_basic_ratio():
+    r = design_parapet(height_m=1.0, thickness_mm=150.0)
+    defl = r.data["deflection"]
+    assert defl["allowable_L_by_d"] < 20.0
+    assert defl["ok"]
+
+
+def test_parapet_custom_lateral_load_overrides_default():
+    r = design_parapet(height_m=1.1, lateral_kN_per_m=1.5)
+    assert math.isclose(r.data["Mu_kNm"], 1.5 * 1.5 * 1.1, rel_tol=1e-9)
