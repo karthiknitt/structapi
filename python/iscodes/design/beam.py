@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 
-from .. import tables, serviceability as svc
+from .. import rounding, tables, serviceability as svc
 from ..analysis.beam import BeamCase, analyze
 from . import flexure, shear
 
@@ -89,6 +89,35 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
     stirrups = shear.design_stirrups(Vu, b, d, fck, fy, Ast_prov,
                                      stirrup_dia=stirrup_dia)
 
+    # ---- ductile two-zone stirrup schedule (IS 13920:2016 cl 6.3) ---------
+    # Applies alongside (never instead of) the IS 456 shear design above: the
+    # ductile caps can only tighten the pitch, never relax it.
+    ductile_stirrups = None
+    if seismic:
+        # Smallest longitudinal bar diameter. design_beam() carries a single
+        # bar_dia for both tension and compression steel, so dia_min == bar_dia.
+        dia_min = bar_dia
+        # cl 6.3.5: over a length 2d from each support face the hoop spacing
+        # shall not exceed d/4 nor 8*dia_min -- but "need not be less than
+        # 100 mm" (constructability floor, retained from IS 13920:1993).
+        s_conf_limit = max(min(d / 4.0, 8.0 * dia_min), 100.0)
+        s_span_limit = d / 2.0          # cl 6.3.5, elsewhere along the span
+        s_conf = rounding.site_spacing(s_conf_limit)
+        s_span = rounding.site_spacing(s_span_limit)
+        sv_shear = stirrups["sv_provided"]
+        if sv_shear > 0:                # shear-governed pitch may govern
+            s_conf = min(s_conf, sv_shear)
+            s_span = min(s_span, sv_shear)
+        ductile_stirrups = {
+            "confining_zone_length_mm": 2.0 * d,
+            "confining_zone_spacing_limit_mm": s_conf_limit,
+            "confining_zone_spacing_mm": s_conf,
+            "first_stirrup_offset_mm": 50.0,
+            "span_zone_spacing_limit_mm": s_span_limit,
+            "span_zone_spacing_mm": s_span,
+            "hook": "135 deg bend, extend 10*dia beyond bend, closed hoop",
+        }
+
     # ---- deflection -------------------------------------------------------
     defl = svc.check_deflection(span_m * 1000.0, d,
                                 _DEFLECTION_SUPPORT.get(support, "simply_supported"),
@@ -114,12 +143,19 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
                        True))
 
     if seismic:
-        checks.append((f"IS 13920 min width b >= {tables.DUCTILE['beam_min_b']:.0f} (cl 6.1.3)",
+        checks.append((f"IS 13920 min width b >= {tables.DUCTILE['beam_min_b']:.0f} (cl 6.1.1)",
                        b >= tables.DUCTILE["beam_min_b"]))
         checks.append((f"IS 13920 pt <= {tables.DUCTILE['beam_max_pt']*100:.1f}% (cl 6.2.2)",
                        pt / 100.0 <= tables.DUCTILE["beam_max_pt"]))
         checks.append(("IS 13920 min tension steel Ast_min (cl 6.2.1)",
                        Ast_prov >= Ast_min))
+        checks.append(("IS 13920 confining-zone (2d) stirrup spacing <= "
+                       "max(min(d/4, 8*dia_min), 100) (cl 6.3.5)",
+                       0 < ductile_stirrups["confining_zone_spacing_mm"]
+                       <= ductile_stirrups["confining_zone_spacing_limit_mm"]))
+        checks.append(("IS 13920 span-zone stirrup spacing <= d/2 (cl 6.3.5)",
+                       0 < ductile_stirrups["span_zone_spacing_mm"]
+                       <= ductile_stirrups["span_zone_spacing_limit_mm"]))
 
     ok = all(v for _, v in checks)
 
@@ -145,6 +181,9 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
         "deflection": defl,
         "side_face_steel_required": side_face,
     }
+    if ductile_stirrups is not None:
+        # additive, seismic-only (keeps the frozen non-seismic v1 key set intact)
+        summary["ductile_stirrups"] = ductile_stirrups
 
     return {
         "inputs": {"span_m": span_m, "w_dl_kn_m": w_dl_kn_m,

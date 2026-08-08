@@ -204,6 +204,79 @@ def test_design_column_passes_reasonable_case():
     assert r.ok, r.checks
 
 
+def test_ductile_column_confining_hoops_worked_example():
+    """IS 13920:2016 cl 7.4.6 / 7.4.8 special confining reinforcement.
+
+    Hand-worked G+1 seismic column, M25 / Fe500, 300 x 450, 40 mm cover,
+    8-20 dia longitudinal bars:
+        pitch limits: min(b,D)/4 = 75 mm   <-- governs
+                      6 x 20     = 120 mm
+                      cl cap     = 100 mm
+                      -> s = 75 mm (already a multiple of 25)
+        core to hoop outer face: 450-80 = 370 mm (> 300 -> 1 crosstie,
+                                 2 segments, h = 185 mm)
+                                 300-80 = 220 mm
+        Ak = 370 x 220 = 81 400 mm2 ; Ag = 135 000 mm2 ; Ag/Ak - 1 = 0.658477
+        Ash = max(0.18 x 75 x 185 x (25/500) x 0.658477,
+                  0.05 x 75 x 185 x (25/500))
+            = max(82.23, 34.69) = 82.23 mm2
+        -> 8 dia hoop (50.3 mm2) FAILS, 12 dia hoop (113.1 mm2) PASSES.
+    """
+    b, D, fck, fy, cover, bar_dia = 300.0, 450.0, 25.0, 500.0, 40.0, 20.0
+    Ag_hand = b * D
+    Ak_hand = (D - 2 * cover) * (b - 2 * cover)
+    h_hand = (D - 2 * cover) / 2.0            # 370 / 2 segments (h <= 300)
+    s_hand = 75.0
+    ash_hand = max(0.18 * s_hand * h_hand * (fck / fy) * (Ag_hand / Ak_hand - 1),
+                   0.05 * s_hand * h_hand * (fck / fy))
+    assert Ak_hand == 81400.0
+    assert ash_hand == pytest.approx(82.23, abs=0.05)
+
+    kw = dict(b=b, D=D, fck=fck, fy=fy, Pu_kN=900, Mux_kNm=60,
+              L_unsupported_mm=3000, n_bars=8, bar_dia=bar_dia,
+              cover=cover, seismic=True)
+
+    r = column.design_column(tie_dia=12.0, **kw)
+    d = r.data
+    # spacing: the newly added min(b,D)/4 term is the binding limit
+    assert d["confine_spacing_limit"] == pytest.approx(75.0)
+    assert d["confine_spacing_limit"] < min(100.0, 6 * bar_dia)
+    assert d["confine_spacing_max"] == 75.0
+    assert d["confine_spacing_max"] % 25 == 0
+    assert d["confine_length_lo"] == pytest.approx(max(D, 3000 / 6, 450.0))
+    # hoop geometry + area
+    assert d["confine_hoop_h_mm"] == pytest.approx(h_hand)
+    assert d["confine_hoop_h_mm"] <= 300.0
+    assert d["confine_crossties_required"] is True
+    assert d["confine_core_Ak_mm2"] == pytest.approx(Ak_hand)
+    assert d["Ash_required_mm2"] == pytest.approx(ash_hand, rel=1e-9)
+    assert d["Ash_provided_mm2"] == pytest.approx(math.pi * 12.0 ** 2 / 4)
+    assert d["confine_hoop_dia_mm"] == 12.0
+    assert d["confine_hook"].startswith("135 deg bend")
+    ash_checks = [ok for n, ok in r.checks if "Ash" in n]
+    assert ash_checks == [True]
+
+    # undersized hoop -> the same check must fail
+    r8 = column.design_column(tie_dia=8.0, **kw)
+    assert r8.data["Ash_required_mm2"] == pytest.approx(ash_hand, rel=1e-9)
+    assert r8.data["Ash_provided_mm2"] < ash_hand
+    assert [ok for n, ok in r8.checks if "Ash" in n] == [False]
+    assert not r8.ok
+
+
+def test_ductile_column_confining_absent_when_not_seismic():
+    """Non-seismic regression guard for the cl 7.4 additions."""
+    r = column.design_column(b=300, D=450, fck=25, fy=500, Pu_kN=900,
+                             Mux_kNm=60, L_unsupported_mm=3000, n_bars=8,
+                             bar_dia=20, cover=40, tie_dia=8.0, seismic=False)
+    for k in ("Ash_required_mm2", "Ash_provided_mm2", "confine_hoop_dia_mm",
+              "confine_spacing_max", "confine_length_lo", "confine_hook"):
+        assert k not in r.data
+    assert not any("cl 7.4" in n for n, _ in r.checks)
+    # pre-existing IS 456 tie fields are untouched
+    assert r.data["tie_pitch_max"] % 25 == 0
+
+
 def test_design_column_fails_overloaded():
     r = column.design_column(b=300, D=300, fck=20, fy=415,
                              Pu_kN=3000, Mux_kNm=150,
