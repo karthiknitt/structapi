@@ -105,7 +105,7 @@ class SeismicResult:
 def fundamental_period(h: float, frame: str = "rc", d: float | None = None) -> float:
     """Approximate Ta (s). cl 7.6.2.
 
-    rc bare frame: 0.075 h^0.75; steel: 0.085 h^0.75;
+    rc bare frame: 0.075 h^0.75; steel: 0.080 h^0.75;
     with masonry infill: 0.09 h / sqrt(d) (d = base dimension in load dirn, m).
     """
     f = frame.lower()
@@ -114,7 +114,7 @@ def fundamental_period(h: float, frame: str = "rc", d: float | None = None) -> f
             raise ValueError("infill formula needs base dimension d")
         return 0.09 * h / d ** 0.5
     if f in ("steel",):
-        return 0.085 * h ** 0.75
+        return 0.080 * h ** 0.75
     return 0.075 * h ** 0.75
 
 

@@ -123,7 +123,7 @@ def ductile_beam_checks(b: float, D: float, pt: float, pc: float) -> list:
     """
     d = tables.DUCTILE
     checks = []
-    checks.append(("beam width >= 200 mm (IS13920 cl 6.1.3)", b >= d["beam_min_b"]))
+    checks.append(("beam width >= 200 mm (IS13920 cl 6.1.1)", b >= d["beam_min_b"]))
     checks.append(("b/D >= 0.3 (IS13920 cl 6.1.2)", D > 0 and b / D >= 0.3))
     checks.append(("max tension steel pt <= 2.5% (IS13920 cl 6.2.2)",
                    pt <= d["beam_max_pt"] * 100))
@@ -133,7 +133,7 @@ def ductile_beam_checks(b: float, D: float, pt: float, pc: float) -> list:
 
 
 def ductile_column_checks(b: float, D: float, hoop_spacing: float, bar_dia: float) -> list:
-    """Ductile column detailing sanity checks. IS 13920:2016 cl 7.1, 8.1."""
+    """Ductile column detailing sanity checks. IS 13920:2016 cl 7.1, 7.4.6."""
     d = tables.DUCTILE
     checks = []
     checks.append(("min column dimension >= 300 mm, if supporting > 2 storeys "
@@ -142,6 +142,6 @@ def ductile_column_checks(b: float, D: float, hoop_spacing: float, bar_dia: floa
                    max(b, D) > 0 and min(b, D) / max(b, D) >= 0.4))
     max_hoop_spacing = min(d["confine_spacing_max"], d["confine_spacing_6db"] * bar_dia)
     checks.append((f"hoop spacing <= min(100mm, 6*dia)={max_hoop_spacing:.0f} mm "
-                   "in confining length lo (IS13920 cl 8.1)",
+                   "in confining length lo (IS13920 cl 7.4.6)",
                    hoop_spacing <= max_hoop_spacing))
     return checks

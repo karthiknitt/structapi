@@ -71,6 +71,11 @@ def test_sa_by_g_rock_spectrum():
     assert tables.sa_by_g(1.0, "soft") == pytest.approx(1.67, abs=0.005)
 
 
+def test_importance_factor_table8():
+    assert tables.IMPORTANCE == {"ordinary": 1.0, "important_community": 1.2}
+
+
+
 # ---------------------------------------------------------------------------
 # materials.py
 # ---------------------------------------------------------------------------
@@ -115,6 +120,14 @@ def test_wind_pressure_50ms_cat2_10m():
     assert r.pz == pytest.approx(1.5, abs=0.01)     # 0.6*50^2 = 1500 N/m2
     assert r.pd == pytest.approx(1.35, abs=0.01)    # Kd=0.9
     assert r.pd >= 0.7 * r.pz
+
+
+def test_fundamental_period_steel_coefficient():
+    assert loads.fundamental_period(12.0, frame="steel") == pytest.approx(
+        0.080 * 12.0 ** 0.75, rel=1e-6)
+    # RC branch unaffected — regression guard
+    assert loads.fundamental_period(12.0, frame="rc") == pytest.approx(
+        0.075 * 12.0 ** 0.75, rel=1e-6)
 
 
 def test_seismic_base_shear_hand_calc():
