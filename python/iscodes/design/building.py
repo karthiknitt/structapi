@@ -506,7 +506,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                     occupancy: str = "residential_room",
                     city: str | None = None, basic_wind_speed: float | None = None,
                     seismic_zone: str = "III", terrain_category: int = 2,
-                    soil: str = "medium", sbc_kpa: float = 200.0,
+                    soil: str = "medium", sbc_kpa: float | None = None,
                     fck: float = 25.0, fy: float = 500.0,
                     exposure: str = "moderate",
                     finish_kn_m2: float = 1.5,
@@ -535,6 +535,11 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         "steel mass = designed Ast x length x 7850 kg/m3 x 1.10 waste",
         "column moments: lateral portal moments + minimum eccentricity per IS 456 cl 25.4",
     ]
+    if sbc_kpa is None:
+        sbc_kpa = 150.0
+        assumptions.append(
+            "sbc_kpa not provided — defaulted to 150 kPa (conservative "
+            "placeholder; verify against an actual soil report)")
     il = ld.imposed_load(occupancy)
     if seismic_detailing is None:
         seismic_detailing = seismic_zone.upper() in ("III", "IV", "V")
