@@ -222,3 +222,50 @@ def test_exposure_cover_propagates_to_beam(ref):
     # ref's beam (moderate default) still matches for a sanity cross-check.
     beam_ref = next(iter(ref["beams"].values()))
     assert beam_ref["inputs"]["cover"] == 30.0
+
+
+def test_exposure_crack_width_limit_reaches_beam(ref):
+    # ref (exposure="moderate") -> 0.3 mm cl 43.1 limit on every beam.
+    for b in ref["beams"].values():
+        assert b["design"]["crack_width"]["limit_mm"] == pytest.approx(0.3)
+        assert b["design"]["crack_width"]["exposure"] == "moderate"
+
+    extreme = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=40, fy=500, exposure="extreme")
+    for b in extreme["beams"].values():
+        assert b["design"]["crack_width"]["limit_mm"] == pytest.approx(0.2)
+        assert b["design"]["crack_width"]["exposure"] == "extreme"
+
+
+def test_crack_width_deemed_to_satisfy_assumption_string(monkeypatch):
+    """When the explicit Annex F crack-width check fails but the cl
+    26.3.3(b) deemed-to-satisfy bar-spacing route still passes, an
+    assumption string must be emitted disclosing that reliance.
+
+    In practice design_building()'s own D auto-sizing loop resolves the
+    explicit check for realistic geometries before D hits its 1200 mm cap
+    (deep sections often go "uncracked" under service moment, cl 43.1 note),
+    so the trigger condition is forced deterministically here by patching
+    tables.crack_limit_for_exposure to an impossible 0.0 mm limit -- this
+    isolates and proves the building.py trigger/assumption-append logic
+    itself, independent of whether a real design happens to land there.
+    """
+    from iscodes import tables as tbl
+    monkeypatch.setattr(tbl, "crack_limit_for_exposure", lambda exposure: 0.0)
+
+    r = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, exposure="moderate")
+
+    assert any(cw["design"]["crack_width"]["deemed_to_satisfy"]["ok"]
+              and not cw["design"]["crack_width"]["ok"]
+              for cw in r["beams"].values()), \
+        "expected at least one beam relying on the deemed-to-satisfy route"
+    assert any("deemed-to-satisfy" in a for a in r["assumptions"])

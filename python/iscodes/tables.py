@@ -434,6 +434,64 @@ STEEL_STRESS_DIRECT_TENSION_LIQUID = 100.0
 MIN_STEEL_SURFACE_ZONE_HYSD = 0.0035  # 0.35% of surface zone each face, each dirn
 MIN_STEEL_SURFACE_ZONE_MILD = 0.0064
 
+
+# ---------------------------------------------------------------------------
+# IS 456:2000 cl 43.1 — crack-width limit for ordinary RC members (not
+# liquid-retaining; those use the tighter IS 3370 limits above).
+#
+# cl 43.1: "the practical objective is to restrict the width of cracks... to
+# 0.3 mm" as the general limit. Where members are subject to a more
+# aggressive environment (cl 35.3.2 / Table 3 exposure classes 'severe',
+# 'very severe', 'extreme'), commentary/practice (SP:24, Pillai & Menon)
+# tightens this to 0.2 mm. This codebase already categorises exposure via
+# EXPOSURE (Table 5, mild/moderate/severe/very severe/extreme) for cover and
+# grade selection, so that same categorisation is reused here rather than
+# inventing a separate one: 'mild'/'moderate' -> 0.3 mm, everything harsher
+# -> 0.2 mm.
+# ---------------------------------------------------------------------------
+
+CRACK_LIMIT_GENERAL = 0.3       # mm — mild / moderate exposure, IS 456 cl 43.1
+CRACK_LIMIT_AGGRESSIVE = 0.2    # mm — severe / very severe / extreme exposure
+CRACK_AGGRESSIVE_EXPOSURES = {"severe", "very severe", "extreme"}
+
+
+def crack_limit_for_exposure(exposure: str) -> float:
+    """IS 456 cl 43.1 crack-width limit (mm) for the given Table 5 exposure
+    category (see CRACK_LIMIT_* docstring above for the mapping rationale)."""
+    return (CRACK_LIMIT_AGGRESSIVE if exposure in CRACK_AGGRESSIVE_EXPOSURES
+            else CRACK_LIMIT_GENERAL)
+
+
+# ---------------------------------------------------------------------------
+# IS 456:2000 cl 43.1 / cl 26.3.3(b) — deemed-to-satisfy crack control via
+# maximum clear spacing of tension reinforcement in beams.
+#
+# cl 43.1 notes that compliance with the tension-reinforcement spacing rules
+# of cl 26.3.2/26.3.3 is generally sufficient to keep flexural crack widths
+# within the cl 43.1 limit without an explicit Annex F calculation. cl
+# 26.3.3(b) tabulates maximum clear spacing by fy and percentage moment
+# redistribution; this model does not track moment redistribution, so the
+# conservative 0%-redistribution column is used (approximation, documented
+# in the beam.py call site).
+# ---------------------------------------------------------------------------
+
+MAX_BAR_SPACING_TENSION = {250: 300.0, 415: 180.0, 500: 150.0}  # mm, 0% redistribution
+
+
+def max_bar_spacing_tension(fy: float) -> float:
+    """Deemed-to-satisfy max clear spacing (mm) of tension bars, cl 26.3.3(b),
+    0% redistribution column. Interpolates between the tabulated fy grades."""
+    grades = sorted(MAX_BAR_SPACING_TENSION)
+    if fy <= grades[0]:
+        return MAX_BAR_SPACING_TENSION[grades[0]]
+    if fy >= grades[-1]:
+        return MAX_BAR_SPACING_TENSION[grades[-1]]
+    for lo, hi in zip(grades, grades[1:]):
+        if lo <= fy <= hi:
+            s_lo, s_hi = MAX_BAR_SPACING_TENSION[lo], MAX_BAR_SPACING_TENSION[hi]
+            return s_lo + (s_hi - s_lo) * (fy - lo) / (hi - lo)
+    return MAX_BAR_SPACING_TENSION[grades[-1]]  # unreachable, defensive
+
 TANK_MIN_FCK = 30.0     # M30 min for liquid-retaining RC
 TANK_MAX_WC = 0.45
 TANK_MIN_COVER = 45.0   # mm, liquid face

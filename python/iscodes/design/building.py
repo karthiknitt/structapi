@@ -679,6 +679,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     # ---------------- beams (unique by span/tributary) ----------------
     wall_kn_m = ld.wall_load_per_m(wall_thickness_m, storey_height_m)
     beams, beam_len_total = {}, 0.0
+    crack_width_deemed_relied_on = False
 
     def trib_width(spacings, idx_line):
         left = spacings[idx_line - 1] / 2 if idx_line > 0 else 0.0
@@ -775,7 +776,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
             while D <= 1200:
                 r = design_beam(span, w_dl, w_il, b, D, fck, fy,
                                 support=sup, seismic=seismic_detailing,
-                                cover=cov, **kw)
+                                cover=cov, exposure=exposure, **kw)
                 # the ductile checks participate in the auto-sizing loop, not
                 # just the report -- a pt > 2.5% at the joint is fixed by a
                 # deeper section, so the sizer must be able to see it.
@@ -789,6 +790,15 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                 r["ok"] = r["ok"] and all(v for _, v in dchecks)
                 r["M_lateral_support_kNm"] = M_E_support_kNm
             r["b_mm"], r["D_mm"] = b, D
+            # crack-width deemed-to-satisfy (cl 43.1 note / cl 26.3.3(b)):
+            # if the explicit Annex F calc fails but the bar-spacing
+            # deemed-to-satisfy alternative passes, the design still relies
+            # on that alternative route -- surface it in assumptions so a
+            # reader knows crack control isn't resting on the explicit
+            # number alone.
+            cwid = r["design"].get("crack_width", {})
+            if not cwid.get("ok") and cwid.get("deemed_to_satisfy", {}).get("ok"):
+                crack_width_deemed_relied_on = True
             r["span_m"], r["trib_width_m"] = span, tw
             r["count"], r["n_spans"] = 1, n_spans_total
             r["continuous"] = continuous_ok
@@ -1009,6 +1019,14 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
             span_m=None, check=f"fck >= exposure min grade ({exposure})",
             actual=fck, limit=exp["min_fck"], unit="MPa",
             remedy_hint="increase_grade"))
+
+    if crack_width_deemed_relied_on:
+        assumptions.append(
+            "crack-width SLS (IS 456 cl 43.1): at least one beam's explicit "
+            "Annex F crack-width calculation exceeds the exposure limit, but "
+            "the cl 26.3.3(b) deemed-to-satisfy bar-spacing rule passes for "
+            "it -- that beam's crack control relies on the deemed-to-satisfy "
+            "route, not the explicit number")
 
     return {
         "ok": all_checks_ok,

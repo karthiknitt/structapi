@@ -13,7 +13,8 @@
   "flexure Ast <= Ast_max (cl 26.5.1.1b)",
   "moment capacity >= Mu",
   "shear (cl 40)",
-  "deflection L/d (cl 23.2.1)"
+  "deflection L/d (cl 23.2.1)",
+  "crack width <= 0.3 mm (IS 456 cl 43.1, moderate exposure)"
  ],
  "data_keys": [
   "design",
@@ -33,6 +34,7 @@
   "Mu_sagging_kNm",
   "Vu_max_kN",
   "bar_dia",
+  "crack_width",
   "d_mm",
   "deflection",
   "doubly_reinforced",

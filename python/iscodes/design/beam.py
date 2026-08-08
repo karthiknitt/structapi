@@ -29,7 +29,8 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
                 stirrup_dia: float = 8, seismic: bool = False,
                 Mu_span_override_kNm: float | None = None,
                 Mu_support_override_kNm: float | None = None,
-                Vu_override_kN: float | None = None) -> dict:
+                Vu_override_kN: float | None = None,
+                exposure: str = "moderate") -> dict:
     """Design a single-span rectangular RC beam.
 
     b, D, cover, bar_dia, stirrup_dia in mm; loads in kN/m and (P_kN, a_m).
@@ -51,10 +52,25 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
     ``analyze()`` call still runs so the returned SFD/BMD arrays remain
     available for plotting, but its moments no longer drive the section.
 
-    With no overrides the behaviour, the returned key set and every computed
-    value are bit-for-bit identical to the pre-existing single-layer design
-    (the frozen ``/v1/calc/beam`` contract) — the ``top_steel``/``continuous``
-    keys are added only in override mode.
+    With no overrides the behaviour and every pre-existing computed value are
+    bit-for-bit identical to the pre-existing single-layer design (the frozen
+    ``/v1/calc/beam`` v1 contract) — the ``top_steel``/``continuous`` keys are
+    added only in override mode, and the new ``crack_width`` key/check below
+    is additive (present in every mode, new field only).
+
+    Crack-width SLS (IS 456 cl 43.1)
+    ---------------------------------
+    Every call also checks flexural crack width at the bottom (sagging/span)
+    tension face per Annex F (``serviceability.crack_width_flexure``),
+    against the cl 43.1 limit for ``exposure`` (0.3 mm mild/moderate, 0.2 mm
+    severe/very severe/extreme — see ``tables.crack_limit_for_exposure``),
+    plus the cl 26.3.3(b) deemed-to-satisfy max bar-spacing alternative. Two
+    approximations, both documented at the call site: the service moment is
+    back-calculated as ``Mu_bottom / 1.5`` (undoing this module's own
+    1.5(DL+IL) gravity factor; not exact when IL/DL proportions vary or a
+    lateral moment is present), and the clear bar spacing is derived
+    assuming a single reinforcement layer (this model doesn't track bar
+    layout beyond a count, consistent with everything else here).
     """
     # ---- factored loads (1.5(DL+IL), cl combos gravity) -------------------
     w_u = 1.5 * (w_dl_kn_m + w_il_kn_m)
@@ -190,6 +206,49 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
                                 ast_reqd_by_prov=min(Ast_reqd / Ast_prov, 1.0),
                                 pc=100.0 * Asc_prov / (b * d))
 
+    # ---- crack width, IS 456 cl 43.1 / Annex F -----------------------------
+    # Bottom (sagging/span) tension layer, service load. M_service is
+    # approximated as Mu_bottom / 1.5, undoing this module's own 1.5(DL+IL)
+    # gravity factor (see docstring); not exact when a lateral component is
+    # blended into Mu_bottom via Mu_span_override_kNm.
+    M_service_kNm = Mu_bottom_kNm / 1.5
+    # Clear spacing between adjacent bars in a single layer (approximation:
+    # assumes all n_bars sit in one layer, ignores multi-layer stacking for
+    # large n_bars — consistent with the rest of this model, which doesn't
+    # track bar layout beyond a count).
+    if n_bars > 1:
+        bar_spacing_mm = (b - 2 * cover - 2 * stirrup_dia
+                          - n_bars * bar_dia) / (n_bars - 1)
+    else:
+        bar_spacing_mm = b - 2 * cover - 2 * stirrup_dia - bar_dia
+    bar_spacing_mm = max(bar_spacing_mm, 1.0)  # geometric floor, degenerate case
+    cw = svc.crack_width_flexure(b, D, d, Ast_prov, fck,
+                                 M_service_kNm * 1e6, cover,
+                                 bar_dia, bar_spacing_mm)
+    crack_limit_mm = tables.crack_limit_for_exposure(exposure)
+    crack_width_mm = cw.get("w_cr")
+    crack_ok = crack_width_mm is not None and crack_width_mm <= crack_limit_mm
+    # Deemed-to-satisfy alternative (cl 43.1 note / cl 26.3.3(b)): compliance
+    # with the max tension-bar-spacing rule is generally sufficient without
+    # an explicit Annex F calculation. 0%-redistribution column (this model
+    # doesn't track redistribution) — see tables.max_bar_spacing_tension.
+    deemed_spacing_limit_mm = tables.max_bar_spacing_tension(fy)
+    deemed_ok = bar_spacing_mm <= deemed_spacing_limit_mm
+    crack_width = {
+        "exposure": exposure,
+        "M_service_kNm": M_service_kNm,
+        "bar_spacing_mm": bar_spacing_mm,
+        "crack_width_mm": crack_width_mm,
+        "steel_stress_service_MPa": cw.get("fs"),
+        "limit_mm": crack_limit_mm,
+        "ok": crack_ok,
+        "deemed_to_satisfy": {
+            "max_spacing_mm": deemed_spacing_limit_mm,
+            "actual_spacing_mm": bar_spacing_mm,
+            "ok": deemed_ok,
+        },
+    }
+
     # ---- checks -----------------------------------------------------------
     def _capacity(Ast_p: float, Asc_p: float, dbl: bool) -> float:
         return (flexure.mu_capacity(Ast_p, b, d, fck, fy)
@@ -203,6 +262,8 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
     checks.append(("moment capacity >= Mu", Mu_capacity >= Mu * 0.999))
     checks.append(("shear (cl 40)", stirrups["ok"]))
     checks.append(("deflection L/d (cl 23.2.1)", defl["ok"]))
+    checks.append((f"crack width <= {crack_limit_mm} mm "
+                   f"(IS 456 cl 43.1, {exposure} exposure)", crack_ok))
 
     if continuous:
         # Additive, continuous-only: the frozen single-layer /v1/calc/beam
@@ -261,6 +322,7 @@ def design_beam(span_m: float, w_dl_kn_m: float, w_il_kn_m: float,
         "stirrups": stirrups,
         "deflection": defl,
         "side_face_steel_required": side_face,
+        "crack_width": crack_width,
     }
     if ductile_stirrups is not None:
         # additive, seismic-only (keeps the frozen non-seismic v1 key set intact)

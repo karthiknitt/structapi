@@ -54,6 +54,7 @@ class BeamIn(_In):
     bar_dia: float = 20.0
     stirrup_dia: float = 8.0
     seismic: bool = False
+    exposure: str = "moderate"
     pdf_report: bool = False
 
 

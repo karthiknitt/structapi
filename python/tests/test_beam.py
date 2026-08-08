@@ -7,7 +7,7 @@ import pytest
 
 from iscodes.analysis.beam import BeamCase, analyze, continuous_moments
 from iscodes.design import flexure, shear, beam as beamdesign
-from iscodes import plotting
+from iscodes import plotting, serviceability as svc, tables
 
 
 # ---------------------------------------------------------------------------
@@ -323,3 +323,124 @@ def test_plot_pressure_diagram(tmp_path):
     p = tmp_path / "pressure.png"
     plotting.plot_pressure_diagram(3.0, 80.0, 150.0, "Footing pressure", str(p))
     assert p.exists() and p.stat().st_size > 5000
+
+
+# ---------------------------------------------------------------------------
+# crack-width SLS (PC-5, IS 456 cl 43.1) wired into design_beam()
+# ---------------------------------------------------------------------------
+
+_CRACK_KW = dict(span_m=6.0, w_dl_kn_m=15.0, w_il_kn_m=10.0,
+                 b=300, D=550, fck=25, fy=500, support="ss")
+
+
+def test_crack_width_worked_example_matches_annex_f():
+    """Hand-worked crack-width example: derive x, fs, eps_m, a_cr, w_cr
+    independently via the Annex F formulas in serviceability.py (same
+    section as test_design_beam_end_to_end) and confirm design_beam()'s
+    wired-in crack_width dict matches exactly (identical inputs)."""
+    r = beamdesign.design_beam(**_CRACK_KW)
+    d_design = r["design"]
+
+    b, D, fck = 300.0, 550.0, 25.0
+    cover, bar_dia, stirrup_dia = 30.0, 20.0, 8.0
+    d = D - cover - stirrup_dia - bar_dia / 2.0        # 502 mm
+    assert d_design["d_mm"] == pytest.approx(d)
+
+    n_bars = d_design["n_bars"]
+    Ast_prov = d_design["Ast_prov_mm2"]
+    # bottom/sagging moment for a non-continuous ("ss") beam is the whole
+    # envelope Mu_max; service moment undoes the 1.5(DL+IL) gravity factor
+    Mu_bottom_kNm = d_design["Mu_max_kNm"]
+    M_service_kNm = Mu_bottom_kNm / 1.5
+    assert M_service_kNm == pytest.approx(1.5 * 25 * 6 ** 2 / 8 / 1.5)  # 112.5
+
+    # clear spacing between bars in a single layer (brief's formula)
+    bar_spacing = (b - 2 * cover - 2 * stirrup_dia
+                  - n_bars * bar_dia) / (n_bars - 1)
+    assert bar_spacing == pytest.approx(d_design["crack_width"]["bar_spacing_mm"])
+
+    # independent Annex F computation via serviceability.py directly
+    x = svc.cracked_section_na(b, d, Ast_prov, fck)
+    fs = svc.steel_stress_service(M_service_kNm * 1e6, b, d, Ast_prov, fck)
+    cw = svc.crack_width_flexure(b, D, d, Ast_prov, fck, M_service_kNm * 1e6,
+                                 cover, bar_dia, bar_spacing)
+
+    assert d_design["crack_width"]["steel_stress_service_MPa"] == pytest.approx(fs)
+    assert d_design["crack_width"]["crack_width_mm"] == pytest.approx(cw["w_cr"])
+    # sanity: w_cr should be a small positive number well under 1 mm
+    assert 0.0 < cw["w_cr"] < 1.0
+    assert cw["x"] == pytest.approx(x)
+
+
+def test_crack_width_check_passes_moderate_exposure():
+    r = beamdesign.design_beam(**_CRACK_KW)  # default exposure="moderate"
+    cw = r["design"]["crack_width"]
+    assert cw["exposure"] == "moderate"
+    assert cw["limit_mm"] == pytest.approx(0.3)
+    assert cw["crack_width_mm"] < cw["limit_mm"]
+    assert cw["ok"] is True
+    names = dict(r["checks"])
+    assert names["crack width <= 0.3 mm (IS 456 cl 43.1, moderate exposure)"]
+
+
+def test_crack_width_check_fails_extreme_exposure_wide_spacing():
+    """Wide 2-bar layer + extreme exposure (0.2 mm limit) drives the
+    explicit crack width over the limit, while the cl 26.3.3(b)
+    deemed-to-satisfy bar-spacing alternative still passes -- exactly the
+    scenario design_building() surfaces as an assumption string."""
+    r = beamdesign.design_beam(span_m=8.0, w_dl_kn_m=8.0, w_il_kn_m=5.0,
+                               b=300, D=450, fck=20, fy=415, support="ss",
+                               cover=50, bar_dia=32, stirrup_dia=8,
+                               exposure="extreme")
+    cw = r["design"]["crack_width"]
+    assert cw["exposure"] == "extreme"
+    assert cw["limit_mm"] == pytest.approx(0.2)
+    assert cw["crack_width_mm"] > cw["limit_mm"]
+    assert cw["ok"] is False
+    assert cw["deemed_to_satisfy"]["ok"] is True   # spacing route still OK
+    names = dict(r["checks"])
+    assert names["crack width <= 0.2 mm (IS 456 cl 43.1, extreme exposure)"] is False
+    assert r["ok"] is False   # a failing check pulls down the overall flag
+
+
+def test_crack_width_limit_varies_with_exposure():
+    kw = dict(_CRACK_KW)
+    r_moderate = beamdesign.design_beam(exposure="moderate", **kw)
+    r_severe = beamdesign.design_beam(exposure="severe", **kw)
+    r_extreme = beamdesign.design_beam(exposure="extreme", **kw)
+    assert r_moderate["design"]["crack_width"]["limit_mm"] == pytest.approx(0.3)
+    assert r_severe["design"]["crack_width"]["limit_mm"] == pytest.approx(0.2)
+    assert r_extreme["design"]["crack_width"]["limit_mm"] == pytest.approx(0.2)
+    # same section/steel -> same computed crack width, different limit only
+    assert (r_moderate["design"]["crack_width"]["crack_width_mm"]
+           == pytest.approx(r_severe["design"]["crack_width"]["crack_width_mm"]))
+
+
+def test_crack_width_backward_compat_default_exposure():
+    """No exposure argument -> identical behaviour to an explicit
+    exposure='moderate' call, and every pre-existing field is untouched."""
+    r_default = beamdesign.design_beam(**_CRACK_KW)
+    r_explicit = beamdesign.design_beam(exposure="moderate", **_CRACK_KW)
+    for key in ("Ast_prov_mm2", "Ast_reqd_mm2", "n_bars", "Mu_max_kNm",
+               "Vu_max_kN", "d_mm", "pt_percent"):
+        assert r_default["design"][key] == pytest.approx(r_explicit["design"][key])
+    assert r_default["design"]["crack_width"] == r_explicit["design"]["crack_width"]
+    # new field is additive -- every pre-existing key from the frozen v1
+    # design_keys set is still present
+    for key in ("Ast_prov_mm2", "Ast_reqd_mm2", "Ast_min_mm2", "Ast_max_mm2",
+               "Mu_max_kNm", "Mu_sagging_kNm", "Mu_hogging_kNm", "Vu_max_kN",
+               "bar_dia", "d_mm", "deflection", "doubly_reinforced",
+               "n_bars", "n_bars_comp", "pt_percent",
+               "side_face_steel_required", "stirrups"):
+        assert key in r_default["design"]
+
+
+def test_max_bar_spacing_tension_table():
+    assert tables.max_bar_spacing_tension(250) == pytest.approx(300.0)
+    assert tables.max_bar_spacing_tension(415) == pytest.approx(180.0)
+    assert tables.max_bar_spacing_tension(500) == pytest.approx(150.0)
+    assert tables.crack_limit_for_exposure("mild") == pytest.approx(0.3)
+    assert tables.crack_limit_for_exposure("moderate") == pytest.approx(0.3)
+    assert tables.crack_limit_for_exposure("severe") == pytest.approx(0.2)
+    assert tables.crack_limit_for_exposure("very severe") == pytest.approx(0.2)
+    assert tables.crack_limit_for_exposure("extreme") == pytest.approx(0.2)

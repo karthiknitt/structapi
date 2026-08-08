@@ -95,6 +95,8 @@ def test_no_override_path_is_unchanged():
         "moment capacity >= Mu",
         "shear (cl 40)",
         "deflection L/d (cl 23.2.1)",
+        # additive (PC-5): crack-width SLS, IS 456 cl 43.1, default exposure
+        "crack width <= 0.3 mm (IS 456 cl 43.1, moderate exposure)",
     ]
 
 
