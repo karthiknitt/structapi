@@ -285,6 +285,52 @@ def test_design_column_fails_overloaded():
 
 
 # ---------------------------------------------------------------------------
+# design/column.py -- IS 13920 cl 7.1.2 min-dimension trigger (seismic)
+# ---------------------------------------------------------------------------
+
+def test_design_column_seismic_lenient_200mm_when_short_span_and_length():
+    r = column.design_column(b=250, D=250, fck=25, fy=415,
+                             Pu_kN=500, Mux_kNm=20,
+                             L_unsupported_mm=3000, n_bars=8, bar_dia=16,
+                             seismic=True, max_beam_span_m=4.0)
+    assert r.data["min_dim_required"] == 200.0
+    assert r.data["strict_trigger"] is False
+    name, ok = next(c for c in r.checks if c[0].startswith("min width"))
+    assert ok  # 250 >= 200
+
+
+def test_design_column_seismic_strict_300mm_span_triggered():
+    r = column.design_column(b=250, D=250, fck=25, fy=415,
+                             Pu_kN=500, Mux_kNm=20,
+                             L_unsupported_mm=3000, n_bars=8, bar_dia=16,
+                             seismic=True, max_beam_span_m=6.0)
+    assert r.data["min_dim_required"] == 300.0
+    assert r.data["strict_trigger"] is True
+    name, ok = next(c for c in r.checks if c[0].startswith("min width"))
+    assert not ok  # 250 < 300
+
+
+def test_design_column_seismic_strict_300mm_length_triggered():
+    r = column.design_column(b=250, D=250, fck=25, fy=415,
+                             Pu_kN=500, Mux_kNm=20,
+                             L_unsupported_mm=4500, n_bars=8, bar_dia=16,
+                             seismic=True, max_beam_span_m=3.0)
+    assert r.data["min_dim_required"] == 300.0
+    assert r.data["strict_trigger"] is True
+    name, ok = next(c for c in r.checks if c[0].startswith("min width"))
+    assert not ok  # 250 < 300
+
+
+def test_design_column_non_seismic_has_no_min_width_check():
+    r = column.design_column(b=250, D=250, fck=25, fy=415,
+                             Pu_kN=500, Mux_kNm=20,
+                             L_unsupported_mm=4500, n_bars=8, bar_dia=16,
+                             seismic=False, max_beam_span_m=6.0)
+    assert not any(name.startswith("min width") for name, _ in r.checks)
+    assert "min_dim_required" not in r.data
+
+
+# ---------------------------------------------------------------------------
 # design/tank.py
 # ---------------------------------------------------------------------------
 
