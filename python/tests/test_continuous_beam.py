@@ -242,7 +242,13 @@ def test_gate_three_equal_spans_selects_continuous():
 
 
 def test_gate_two_spans_falls_back_to_simply_supported():
-    r, flags = _flags(x_spacings_m=[4.0, 4.0], y_spacings_m=[4.0, 4.0])
+    # Zone II (seismic_detailing off) so the cl 22.5.1 continuity gate is
+    # observed in isolation. Under ductile detailing the beam also picks up a
+    # top layer from IS 1893 lateral reversal (PC-2) -- a separate demand
+    # path that has nothing to do with gravity continuity, covered by
+    # test_seismic_lateral_moment_adds_top_steel_to_two_span_beams below.
+    r, flags = _flags(x_spacings_m=[4.0, 4.0], y_spacings_m=[4.0, 4.0],
+                      seismic_zone="II")
     assert flags == {"x": False, "y": False}
     for bm in r["beams"].values():
         assert "top_steel" not in bm["design"]
