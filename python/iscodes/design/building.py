@@ -8,8 +8,11 @@ takeoff (BOQ-shaped) -> consolidated figures + PDF-ready sections.
 
 Deliberate v1 simplifications (all echoed in result["assumptions"]):
 - Regular orthogonal grid; beams on every grid line; columns at intersections.
-- Beams designed as simply supported on the worst span (conservative vs
-  Table 12 continuity).
+- Beams on a grid line with >=3 spans that do not differ by more than 15% of
+  the longest are designed with IS 456 cl 22.5.1 Table 12/13 continuous-beam
+  coefficients, giving separate bottom (sagging) and top (hogging) steel.
+  Any other line (<3 spans, or irregular spacing) falls back to simply
+  supported on the worst span (conservative vs Table 12 continuity).
 - Lateral: equivalent-static seismic and static wind computed; the larger
   base shear governs; portal-frame moment distribution between columns.
 - Steel quantity from designed Ast x member length x 7850 kg/m3 + 10% waste.
@@ -25,6 +28,7 @@ from dataclasses import asdict, is_dataclass
 
 from .. import loads as ld
 from .. import tables
+from ..analysis.beam import continuous_moments
 from . import flexure
 from .column import ColumnSection, design_column, interaction_curve, rect_bar_layout
 from .footing import design_isolated_footing
@@ -111,6 +115,15 @@ def _beam_detail_rows(el: dict) -> list:
         rows.append(["Top (compression) steel",
                      f"{d.get('n_bars_comp', '-')}-{d.get('bar_dia', 0):.0f}φ "
                      f"({d.get('Asc_prov_mm2', 0):.0f} mm2 prov)"])
+    ts = d.get("top_steel")
+    if ts:
+        rows.append(["Top (hogging) steel at supports",
+                     f"{ts['n_bars']}-{ts['bar_dia']:.0f}φ "
+                     f"({ts['Ast_prov_mm2']:.0f} mm2 prov, "
+                     f"{ts['Ast_reqd_mm2']:.0f} mm2 reqd) — IS 456 Table 12"])
+        rows.append(["Design moments (IS 456 cl 22.5.1)",
+                     f"sagging {d.get('bottom_steel_Mu_kNm', 0):.1f} kNm / "
+                     f"hogging {ts['Mu_hogging_kNm']:.1f} kNm"])
     st = d.get("stirrups", {})
     stirrup_dia = el.get("inputs", {}).get("stirrup_dia", 8)
     rows.append(["Stirrups",
@@ -310,6 +323,16 @@ def _beam_violations(key: tuple, bm: dict) -> list:
                                   df.get("actual_L_by_d"),
                                   df.get("allowable_L_by_d"), "ratio",
                                   "reduce_span"))
+        elif name.startswith("top steel Ast <= Ast_max"):
+            out.append(_violation("beam", direction, grid_ref, span, name,
+                                  d.get("top_steel", {}).get("Ast_prov_mm2"),
+                                  d["Ast_max_mm2"], "mm2", "reduce_span"))
+        elif name.startswith("hogging moment capacity"):
+            ts = d.get("top_steel", {})
+            out.append(_violation("beam", direction, grid_ref, span, name,
+                                  ts.get("Mu_hogging_kNm"),
+                                  ts.get("Mu_capacity_kNm"), "kNm",
+                                  "add_grid_line"))
         elif name.startswith("IS 13920 min width"):
             out.append(_violation("beam", direction, grid_ref, span, name,
                                   bm["b_mm"], tables.DUCTILE["beam_min_b"],
@@ -530,7 +553,10 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     h_total = storeys * storey_height_m
     assumptions = [
         "regular orthogonal grid; columns at all intersections; beams on all grid lines",
-        "beams designed simply supported on worst span (conservative)",
+        "beams with >=3 spans differing by <=15% of the longest use IS 456 "
+        "cl 22.5.1 Table 12/13 continuous-beam coefficients (separate top/"
+        "bottom steel, worst span as L); all other beam lines fall back to "
+        "simply supported on worst span (conservative)",
         f"wall load: {wall_thickness_m*1000:.0f} mm brick on every beam, full storey height",
         "portal-frame lateral distribution (interior columns 2x exterior share)",
         "steel mass = designed Ast x length x 7850 kg/m3 x 1.10 waste",
@@ -598,11 +624,19 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     for direction, spans, perp in (("x", x_spacings_m, y_spacings_m),
                                    ("y", y_spacings_m, x_spacings_m)):
         n_lines = len(perp) + 1
+        n_spans_total = len(spans)
+        # IS 456 cl 22.5.1: the Table 12/13 coefficients apply to beams of
+        # uniform cross-section carrying substantially uniformly distributed
+        # loads "over three or more spans which do not differ by more than 15
+        # percent of the longest". Point loads never occur on these beams, and
+        # b/D are constant per grid line, so the span regularity test is the
+        # only run-time condition left to check.
+        continuous_ok = (n_spans_total >= 3
+                         and min(spans) >= 0.85 * max(spans))
         for line in range(n_lines):
             tw = trib_width(perp, line)
             span = max(spans)                       # worst span, conservative
             key = (direction, round(span, 2), round(tw, 2))
-            n_spans_total = len(spans)
             if key in beams:
                 beams[key]["count"] += 1
                 beams[key]["grid_line_indices"].append(line)
@@ -612,17 +646,38 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
             w_il = il * tw
             b = 230.0 if span <= 4.5 else 300.0
             D = max(math.ceil(span * 1000 / 12 / 25) * 25, 300)
+            # Table 12/13 coefficients act on the *factored* DL and IL, each
+            # with its own coefficient (that separation is what encodes the
+            # pattern-loading envelope), so DL and IL are factored by 1.5
+            # individually rather than pre-summed.
+            kw = {}
+            if continuous_ok:
+                cm = continuous_moments(1.5 * w_dl, 1.5 * w_il, span)
+                kw = {
+                    "Mu_span_override_kNm": max(abs(cm["M_span_end"]),
+                                                abs(cm["M_span_interior"])),
+                    "Mu_support_override_kNm": max(
+                        abs(cm["M_support_next_to_end"]),
+                        abs(cm["M_support_interior"])),
+                    "Vu_override_kN": max(abs(v) for k, v in cm.items()
+                                          if k.startswith("V_")),
+                }
+            # 'fixed' only selects the continuous L/d basic ratio (cl 23.2.1)
+            # and a continuity-shaped SFD/BMD for the figure; the section is
+            # designed from the Table 12/13 overrides above, not from analyze().
+            sup = "fixed" if continuous_ok else "ss"
             r = None
             while D <= 1200:
                 r = design_beam(span, w_dl, w_il, b, D, fck, fy,
-                                support="ss", seismic=seismic_detailing,
-                                cover=cov)
+                                support=sup, seismic=seismic_detailing,
+                                cover=cov, **kw)
                 if r["ok"]:
                     break
                 D += 50
             r["b_mm"], r["D_mm"] = b, D
             r["span_m"], r["trib_width_m"] = span, tw
             r["count"], r["n_spans"] = 1, n_spans_total
+            r["continuous"] = continuous_ok
             r["axis"] = direction
             r["grid_line_indices"] = [line]
             r["span_indices"] = list(range(n_spans_total))
@@ -743,10 +798,18 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
             "footings": sum(f["data"]["L_m"] * f["data"]["B_m"]
                             * f["data"]["D_overall_mm"] / 1000 * f["count"]
                             for f in footings.values())}
+    def beam_steel_area(bm: dict) -> float:
+        """Longitudinal bar area per beam cross-section (mm2). Continuous
+        beams also carry a top (hogging) layer, which must be billed or the
+        BOQ silently under-reports them."""
+        d = bm.get("design")
+        if not d or "Ast_prov_mm2" not in d:
+            return 2 * 314.0
+        return d["Ast_prov_mm2"] + d.get("top_steel", {}).get("Ast_prov_mm2", 0.0)
+
     steel = {"slabs": sum(slab_steel(p) for p in panels.values()) * storeys,
-             "beams": sum((bm["design"]["Ast_prov_mm2"]
-                           if "design" in bm and "Ast_prov_mm2" in bm.get("design", {})
-                           else 2 * 314) * 1e-6 * bm["span_m"] * bm["n_spans"]
+             "beams": sum(beam_steel_area(bm)
+                          * 1e-6 * bm["span_m"] * bm["n_spans"]
                           * bm["count"] * STEEL_DENSITY
                           for bm in beams.values()) * storeys,
              "columns": sum(c["n_bars"] * math.pi * c["bar_dia"] ** 2 / 4
