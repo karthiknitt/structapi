@@ -41,6 +41,16 @@ from .beam import design_beam
 STEEL_DENSITY = 7850.0  # kg/m3
 WASTE_FACTOR = 1.10
 
+# Occupancies IS 875-2 cl 3.2 (Table 8 note) excludes from storey-count-based
+# live-load reduction (roofs, storage, parking, fixed/assembly seating -- the
+# imposed load there doesn't attenuate the way ordinary floor occupancy load
+# does across storeys). Single module-level source: one copy previously drove
+# the `assumptions` text, another drove actual reduction behaviour, so
+# editing one without the other made the audit trail lie.
+NEVER_REDUCE_OCCUPANCIES = {"roof_accessible", "roof_non_accessible",
+                            "office_storage", "parking_car",
+                            "assembly_fixed_seating", "assembly_movable_seating"}
+
 
 def _render_beam_figure(r: dict, key: str, direction: str, span: float,
                         tw: float, b: float, D: float, figures_dir: str,
@@ -120,11 +130,23 @@ def _beam_detail_rows(el: dict) -> list:
                      f"({d.get('Asc_prov_mm2', 0):.0f} mm2 prov)"])
     ts = d.get("top_steel")
     if ts:
+        # top_steel is populated whenever ANY Mu_support_override_kNm was
+        # supplied -- that can be genuine Table 12 continuity OR a purely
+        # seismic reversal moment seeded onto a non-continuous beam (see
+        # table12_continuous / top_steel_source in design_building()).
+        # Attribute the clause correctly rather than assuming Table 12.
+        source = el.get("top_steel_source")
+        if source == "seismic_reversal":
+            label = "IS 1893 cl 6.2.3 seismic moment reversal"
+            moments_label = "Design moments (IS 1893 cl 6.2.3 seismic reversal)"
+        else:
+            label = "IS 456 Table 12"
+            moments_label = "Design moments (IS 456 cl 22.5.1)"
         rows.append(["Top (hogging) steel at supports",
                      f"{ts['n_bars']}-{ts['bar_dia']:.0f}φ "
                      f"({ts['Ast_prov_mm2']:.0f} mm2 prov, "
-                     f"{ts['Ast_reqd_mm2']:.0f} mm2 reqd) — IS 456 Table 12"])
-        rows.append(["Design moments (IS 456 cl 22.5.1)",
+                     f"{ts['Ast_reqd_mm2']:.0f} mm2 reqd) — {label}"])
+        rows.append([moments_label,
                      f"sagging {d.get('bottom_steel_Mu_kNm', 0):.1f} kNm / "
                      f"hogging {ts['Mu_hogging_kNm']:.1f} kNm"])
     st = d.get("stirrups", {})
@@ -611,10 +633,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     # Live-load reduction assumption (added before seismic_detailing check
     # because reduction state is decided here and applies globally)
     if apply_ll_reduction:
-        never_reduce_occupancies = {"roof_accessible", "roof_non_accessible",
-                                     "office_storage", "parking_car",
-                                     "assembly_fixed_seating", "assembly_movable_seating"}
-        if occupancy not in never_reduce_occupancies:
+        if occupancy not in NEVER_REDUCE_OCCUPANCIES:
             pct_at_this_storeys = tables.ll_reduction_pct(storeys)
             assumptions.append(
                 f"live-load reduction (IS 875-2 cl 3.2): applied, "
@@ -905,7 +924,22 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                 crack_width_deemed_relied_on = True
             r["span_m"], r["trib_width_m"] = span, tw
             r["count"], r["n_spans"] = 1, n_spans_total
-            r["continuous"] = continuous_ok
+            # Table-12-eligibility flag (IS 456 cl 22.5.1) -- NOT the same as
+            # design["continuous"] (set inside design_beam() whenever ANY
+            # Mu_*_override_kNm is supplied, including a seismic-only
+            # override on a non-Table-12 beam). Keep the names distinct so
+            # downstream code can't confuse "genuinely continuous per Table
+            # 12" with "override-triggered continuous mode".
+            r["table12_continuous"] = continuous_ok
+            # Where the beam's top (hogging) steel demand actually came
+            # from, for correct clause attribution in report output --
+            # design["top_steel"] presence alone doesn't distinguish the two.
+            if continuous_ok:
+                r["top_steel_source"] = "table12"
+            elif seismic_detailing and M_E_support_kNm > 0:
+                r["top_steel_source"] = "seismic_reversal"
+            else:
+                r["top_steel_source"] = None
             r["axis"] = direction
             r["grid_line_indices"] = [line]
             r["span_indices"] = list(range(n_spans_total))
@@ -969,10 +1003,7 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
         P_IL_unreduced = P_IL  # save for later comparison/reporting if needed
         # Apply IS 875-2 cl 3.2 live-load reduction if enabled and occupancy allows
         ll_reduction_pct_applied = 0.0
-        never_reduce_occupancies = {"roof_accessible", "roof_non_accessible",
-                                     "office_storage", "parking_car",
-                                     "assembly_fixed_seating", "assembly_movable_seating"}
-        if apply_ll_reduction and occupancy not in never_reduce_occupancies:
+        if apply_ll_reduction and occupancy not in NEVER_REDUCE_OCCUPANCIES:
             ll_reduction_pct_applied = tables.ll_reduction_pct(storeys)
             P_IL = P_IL * (1.0 - ll_reduction_pct_applied / 100.0)
         P_service = P_D + P_IL
@@ -1031,14 +1062,31 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
                          "P_dead_kN": P_D, "P_imposed_kN": P_IL,
                          "P_overturning_kN": P_E,
                          "Pu_gravity_kN": 1.5 * P_service,
-                         "Mux_kNm": env["Mux_max_kNm"],
-                         "Muy_kNm": env["Muy_max_kNm"],
+                         # NOTE: no top-level "Mux_kNm"/"Muy_kNm" pair here
+                         # (Important 6). The load-combination envelope never
+                         # carries simultaneous Mux+Muy (each lateral family
+                         # expands into an x-only row and a y-only row -- see
+                         # combinations.py), so a (Pu_kN, Mux_max, Muy_max)
+                         # triple built from independent per-axis maxima
+                         # would correspond to no combo row the building was
+                         # actually designed against, and is unsafe to feed
+                         # back into /v1/calc/column as if it were one.
+                         # Mux_envelope_max_kNm/Muy_envelope_max_kNm below are
+                         # the same envelope-maxima data, kept for diagnostics
+                         # but named so they can't be mistaken for a
+                         # same-row triple with Pu_kN. For the physically
+                         # coherent triple, use
+                         # Pu_governing_kN/Mux_governing_kNm/Muy_governing_kNm
+                         # below -- those three are read off the SAME
+                         # interaction-governing row.
                          "governing_combination": gov["name"],
                          "Pu_governing_kN": gov["Pu_kN"],
                          "Mux_governing_kNm": gov["Mux_kNm"],
                          "Muy_governing_kNm": gov["Muy_kNm"],
                          "Pu_max_kN": env["Pu_max_kN"],
                          "Pu_min_kN": env["Pu_min_kN"],
+                         "Mux_envelope_max_kNm": env["Mux_max_kNm"],
+                         "Muy_envelope_max_kNm": env["Muy_max_kNm"],
                          "uplift_governs": env["uplift_governs"],
                          "combinations": env["combos"]}
         if env["uplift_governs"]:
@@ -1061,7 +1109,16 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
     for kind, col in columns.items():
         f = design_isolated_footing(
             P_service_kN=col["P_service_kN"],
-            M_service_kNm=col["M_lateral_kNm"] / 1.2,   # service-level moment
+            # col["M_lateral_kNm"] (M_lat) is passed to comb.combination_
+            # envelope() as M_E_kNm, whose docstring states its inputs are
+            # already unfactored/service-level -- PC-2's D/IL/E-split
+            # machinery both computes and consumes it that way. The
+            # stale "/1.2" here predates that split (when this value was
+            # still an ultimate/factored moment needing de-factoring) and
+            # has not tracked the refactor: dividing an already-unfactored
+            # moment by 1.2 under-states the service moment fed to the
+            # footing design. Pass it through unmodified.
+            M_service_kNm=col["M_lateral_kNm"],
             sbc_kpa=sbc_kpa, col_b_mm=col["b_mm"], col_D_mm=col["D_mm"],
             fck=fck, fy=fy)
         fd = asdict(f) if is_dataclass(f) else f
@@ -1235,6 +1292,12 @@ def design_building(x_spacings_m: list, y_spacings_m: list, storeys: int,
             "the IS 875-2 minimum 0.75 kN/m lateral barrier load -- "
             "result['parapet']; report-only, does not feed into the roof "
             "slab/column/seismic load chain (see design_building() docstring)")
+
+    # all_checks_ok only reflects panels/beams/columns/footings' own "ok"
+    # flags, computed before uplift/combined-footing/exposure-grade
+    # violations are folded into `violations` above -- fold them back in so
+    # result["ok"] == (result["violations"] == []) always holds.
+    all_checks_ok = all_checks_ok and not violations
 
     result = {
         "ok": all_checks_ok,

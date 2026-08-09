@@ -4,7 +4,8 @@ import json
 
 import pytest
 
-from iscodes.design.building import _panel_case, design_building
+from iscodes.design.building import _beam_detail_rows, _panel_case, design_building
+from iscodes.design.footing import design_isolated_footing
 from iscodes.tables import TABLE_26
 
 
@@ -710,3 +711,70 @@ def test_edge_setback_tight_triggers_combined_footing_and_violation():
 def test_edge_setback_json_serializable():
     r = design_building(**_pd5_base_kwargs(), edge_setback_m=0.5)
     json.dumps(r)  # must not raise (numpy arrays would break this)
+
+
+# ---------------------------------------------------------------------------
+# Minor 11 -- footing lateral-moment service-load approximation.
+# ---------------------------------------------------------------------------
+
+def test_footing_lateral_moment_uses_full_service_moment_not_divided_by_1_2(ref):
+    # col["M_lateral_kNm"] is already the unfactored/service-level lateral
+    # moment (it's what feeds comb.combination_envelope()'s M_E_kNm, whose
+    # docstring requires unfactored inputs). The stale "/1.2" call site
+    # under-stated it; confirm the building chain now passes it through
+    # unmodified by reproducing the footing design by hand both ways and
+    # checking the building's actual result matches the UN-divided call,
+    # not the old divided-by-1.2 one.
+    for kind, col in ref["columns"].items():
+        expected = design_isolated_footing(
+            P_service_kN=col["P_service_kN"], M_service_kNm=col["M_lateral_kNm"],
+            sbc_kpa=200, col_b_mm=col["b_mm"], col_D_mm=col["D_mm"],
+            fck=25, fy=500)
+        old_buggy = design_isolated_footing(
+            P_service_kN=col["P_service_kN"],
+            M_service_kNm=col["M_lateral_kNm"] / 1.2,
+            sbc_kpa=200, col_b_mm=col["b_mm"], col_D_mm=col["D_mm"],
+            fck=25, fy=500)
+        actual = ref["footings"][kind]
+        assert actual["data"]["Mx_kNm"] == pytest.approx(
+            expected.data["Mx_kNm"], rel=1e-9)
+        if col["M_lateral_kNm"] > 0:
+            assert expected.data["Mx_kNm"] != pytest.approx(
+                old_buggy.data["Mx_kNm"], rel=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Important 5 regression — "continuous" means two different things at two
+# nesting levels; top-steel clause attribution must not assume Table 12.
+# ---------------------------------------------------------------------------
+
+def test_single_span_seismic_hogging_attributed_to_seismic_not_table12():
+    # Single-span (1 span per grid line) building in seismic zone V: NOT
+    # Table-12-eligible (needs >=3 spans), but seismic_detailing seeds a
+    # support-moment override purely for the IS 1893 cl 6.2.3 reversal,
+    # which design_beam() internally treats as "continuous mode" and
+    # populates top_steel for -- an artifact of the override, not real
+    # Table 12 continuity.
+    r = design_building(
+        x_spacings_m=[6.0], y_spacings_m=[6.0],
+        storeys=3, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="V", terrain_category=1, soil="medium",
+        sbc_kpa=200, fck=25, fy=500)
+    assert r["beams"], "expected at least one beam"
+    checked_any = False
+    for bm in r["beams"].values():
+        # building-level flag: genuinely NOT Table-12-eligible (single span)
+        assert bm["table12_continuous"] is False
+        # yet design_beam()'s internal flag IS true -- override-triggered
+        # continuous mode, on the SAME beam
+        assert bm["design"]["continuous"] is True
+        assert bm["design"].get("top_steel")
+        assert bm["top_steel_source"] == "seismic_reversal"
+
+        rows = _beam_detail_rows(bm)
+        row_text = " ".join(f"{k} {v}" for k, v in rows)
+        assert "cl 6.2.3" in row_text or "seismic" in row_text.lower()
+        assert "Table 12" not in row_text
+        checked_any = True
+    assert checked_any

@@ -169,7 +169,31 @@ def beam_bar_marks(beam_result: dict, span_m: float | None = None) -> list[dict]
             "beam-main-compression", "straight, dev-length anchorage each "
             "end", bar_dia, span_mm + 2 * Ld, n_bars_comp))
 
-    sv_provided = design["stirrups"]["sv_provided"]
+    # Top (hogging) steel layer -- added by the continuous-beam task, which
+    # landed after this function was written. building.py's beam_steel_area()
+    # was patched to include it (see that function's comment); BBS, a
+    # different consumer of the same design_beam() output, was missed.
+    top_steel = design.get("top_steel")
+    if top_steel and top_steel.get("n_bars", 0) > 0:
+        top_bar_dia = top_steel.get("bar_dia", bar_dia)
+        top_Ld = tables.development_length(top_bar_dia, fy, fck)
+        marks.append(_mark_entry(
+            "beam-top-tension", "straight, dev-length anchorage each end "
+            "(hogging/support steel)", top_bar_dia,
+            span_mm + 2 * top_Ld, top_steel["n_bars"]))
+        n_bars_top_comp = top_steel.get("n_bars_comp", 0)
+        if n_bars_top_comp > 0:
+            marks.append(_mark_entry(
+                "beam-top-compression", "straight, dev-length anchorage "
+                "each end (hogging/support steel)", top_bar_dia,
+                span_mm + 2 * top_Ld, n_bars_top_comp))
+
+    # Ductile two-zone stirrup schedule (IS 13920 cl 6.3) takes over from
+    # the uniform IS 456 shear spacing when seismic -- mirror the pattern
+    # column_bar_marks() already uses for confine_spacing_max.
+    ductile_stirrups = design.get("ductile_stirrups")
+    sv_provided = (ductile_stirrups["confining_zone_spacing_mm"]
+                   if ductile_stirrups else design["stirrups"]["sv_provided"])
     if sv_provided and sv_provided > 0:
         n_stirrups = math.ceil(span_mm / sv_provided) + 1
         cutting_length = _rect_link_cutting_length_mm(b, D, cover, stirrup_dia,
