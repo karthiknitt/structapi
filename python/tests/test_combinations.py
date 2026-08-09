@@ -199,15 +199,52 @@ def test_portal_frame_column_envelope_matches_hand_combinations(portal):
         ]
         assert col["Pu_max_kN"] == pytest.approx(max(hand_Pu), rel=1e-9)
         assert col["Pu_min_kN"] == pytest.approx(min(hand_Pu), rel=1e-9)
-        # largest lateral factor in the table is 1.5
-        assert col["Mux_kNm"] == pytest.approx(1.5 * M_E, rel=1e-9)
-        assert col["Muy_kNm"] == pytest.approx(1.5 * M_E, rel=1e-9)
+        # largest lateral factor in the table is 1.5. These are envelope
+        # maxima across independent per-axis combo rows (Important 6) --
+        # NOT a same-row (Pu, Mux, Muy) design triple, hence the
+        # unambiguous "_envelope_max_" naming rather than bare Mux_kNm/
+        # Muy_kNm (which this building-level output no longer exposes).
+        assert col["Mux_envelope_max_kNm"] == pytest.approx(1.5 * M_E, rel=1e-9)
+        assert col["Muy_envelope_max_kNm"] == pytest.approx(1.5 * M_E, rel=1e-9)
 
 
 def test_portal_frame_interior_column_gravity_still_governs(portal):
     """Interior columns get no overturning axial, so 1.5(DL+IL) is max Pu."""
     col = portal["columns"]["interior"]
     assert col["Pu_kN"] == pytest.approx(col["Pu_gravity_kN"], rel=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Important 6 regression -- no non-physical (Pu, Mux, Muy) headline triple.
+# ---------------------------------------------------------------------------
+
+def test_no_misleading_top_level_mux_muy_pair(portal):
+    """Building-level column output must not expose a bare "Mux_kNm"/
+    "Muy_kNm" pair alongside "Pu_kN" -- that combination previously mixed
+    the zero-moment gravity row's Pu with two DIFFERENT lateral rows' axis
+    maxima, a triple that corresponds to no combo row actually designed
+    against."""
+    for col in portal["columns"].values():
+        assert "Mux_kNm" not in col
+        assert "Muy_kNm" not in col
+
+
+def test_governing_triple_is_a_single_combination_row(portal):
+    """The unambiguous (Pu_governing_kN, Mux_governing_kNm,
+    Muy_governing_kNm) triple must be read off the SAME combination row --
+    the one named by governing_combination -- not independently maxed."""
+    for col in portal["columns"].values():
+        matches = [c for c in col["combinations"]
+                  if c["name"] == col["governing_combination"]
+                  and c["Pu_kN"] > 0.0]
+        assert matches, (col["governing_combination"], col["combinations"])
+        # there can be two rows sharing a name (+EL / -EL direction); the
+        # governing one must be among them, matching on all three components
+        assert any(
+            m["Pu_kN"] == pytest.approx(col["Pu_governing_kN"], rel=1e-9)
+            and m["Mux_kNm"] == pytest.approx(col["Mux_governing_kNm"], rel=1e-9)
+            and m["Muy_kNm"] == pytest.approx(col["Muy_governing_kNm"], rel=1e-9)
+            for m in matches)
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +305,13 @@ def test_seismic_lateral_moment_adds_top_steel_to_two_span_beams():
     and the seismic reversal demand are independent."""
     seismic = _beams(seismic_zone="V")
     for bm in seismic["beams"].values():
-        assert bm["continuous"] is False          # 2 spans -> gate rejects
+        # table12_continuous (Important 5 rename, was "continuous"): 2 spans
+        # -> the IS 456 cl 22.5.1 gate rejects, so this is genuinely False --
+        # distinct from design["continuous"], which override-triggered
+        # "continuous mode" still sets True for the seismic reversal moment.
+        assert bm["table12_continuous"] is False
+        assert bm["design"]["continuous"] is True
+        assert bm["top_steel_source"] == "seismic_reversal"
         assert bm["design"]["top_steel"]["Ast_prov_mm2"] > 0
 
 

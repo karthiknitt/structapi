@@ -128,6 +128,60 @@ def test_beam_bar_marks_doubly_reinforced_adds_compression_mark():
 
 
 # ---------------------------------------------------------------------------
+# Important 3 regression -- BBS must include the top (hogging) steel layer
+# and use ductile stirrup spacing when seismic.
+# ---------------------------------------------------------------------------
+
+def _continuous_seismic_beam_result():
+    from iscodes.analysis.beam import continuous_moments
+    cm = continuous_moments(1.5 * 30.0, 1.5 * 20.0, 6.0)
+    mu_span = max(abs(cm["M_span_end"]), abs(cm["M_span_interior"]))
+    mu_sup = max(abs(cm["M_support_next_to_end"]),
+                abs(cm["M_support_interior"]))
+    return design_beam(span_m=6.0, w_dl_kn_m=30.0, w_il_kn_m=20.0,
+                       b=300.0, D=550.0, fck=25.0, fy=500.0, support="fixed",
+                       seismic=True, Mu_span_override_kNm=mu_span,
+                       Mu_support_override_kNm=mu_sup)
+
+
+def test_beam_bar_marks_includes_top_steel_layer():
+    r = _continuous_seismic_beam_result()
+    assert r["design"]["top_steel"]["n_bars"] > 0
+    marks = bbs.beam_bar_marks(r)
+    top = next(m for m in marks if m["mark"] == "beam-top-tension")
+    assert top["count"] == r["design"]["top_steel"]["n_bars"]
+    assert top["dia_mm"] == r["design"]["top_steel"]["bar_dia"]
+
+
+def test_beam_bar_marks_total_weight_increases_with_top_steel():
+    # Same beam with and without the top-steel bar mark included -- total
+    # weight must visibly increase once the omission is fixed (previously
+    # ~50% under-reported on a beam with a substantial hogging layer).
+    r = _continuous_seismic_beam_result()
+    marks = bbs.beam_bar_marks(r)
+    total_with_top = sum(m["total_weight_kg"] for m in marks)
+    total_without_top = sum(m["total_weight_kg"] for m in marks
+                            if not m["mark"].startswith("beam-top"))
+    assert total_with_top > total_without_top
+
+
+def test_beam_bar_marks_uses_ductile_confining_spacing_when_seismic():
+    r = _continuous_seismic_beam_result()
+    ds = r["design"]["ductile_stirrups"]
+    marks = bbs.beam_bar_marks(r)
+    stirrup = next(m for m in marks if m["mark"] == "beam-stirrup")
+    span_mm = r["inputs"]["span_m"] * 1000.0
+    expected_count = math.ceil(
+        span_mm / ds["confining_zone_spacing_mm"]) + 1
+    assert stirrup["count"] == expected_count
+    # sanity: confining-zone spacing is tighter (more stirrups) than the
+    # plain IS 456 shear spacing would have given
+    plain_count = math.ceil(
+        span_mm / r["design"]["stirrups"]["sv_provided"]) + 1
+    assert expected_count >= plain_count
+
+
+# ---------------------------------------------------------------------------
 # column_bar_marks
 # ---------------------------------------------------------------------------
 

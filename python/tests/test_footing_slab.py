@@ -91,6 +91,18 @@ def test_one_way_slab():
     assert r["ok"], r["checks"]
 
 
+def test_one_way_slab_auto_depth_step_is_25mm_site_standard():
+    # Minor 10 regression: the one-way auto-depth growth step must match
+    # this sprint's site-standard-25 convention (same as the two-way slab's
+    # step and rounding.site_spacing) instead of the stale +=10.0 -- a
+    # heavy-load / long-span case needing several growth iterations must
+    # land on a depth that is still an exact multiple of 25 mm.
+    r = slab.design_one_way_slab(lx_m=5.0, w_dl=2.0, w_il=5.0,
+                                 fck=20, fy=415, support="ss")
+    assert r["ok"], r["checks"]
+    assert r["D_mm"] % 25.0 == 0.0
+
+
 def test_two_way_slab_case4():
     r = slab.design_two_way_slab(lx_m=4.0, ly_m=5.0, w_dl=1.5, w_il=3.0,
                                  fck=25, fy=500, case=4)

@@ -64,7 +64,7 @@ def design_one_way_slab(lx_m: float, w_dl: float, w_il: float, fck: float,
                                cover, bar_dia)
         if result["ok"] or not auto:
             return result
-        D_mm += 10.0
+        D_mm += 25.0
     return result
 
 

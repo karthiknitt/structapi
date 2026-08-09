@@ -42,7 +42,14 @@ def design_stirrups(Vu_N: float, b: float, d: float, fck: float, fy: float,
         governing = "designed shear (cl 40.4)"
 
     sv = min(sv, sv_max)
-    sv_prov = rounding.site_spacing(sv)
+    # rounding.site_spacing floors to the nearest 25 mm with no lower bound,
+    # so an sv below 25 mm would otherwise collapse to 0.0 mm c/c -- a
+    # "passing" design with zero stirrups. Floor the provided spacing at the
+    # site-practical minimum and fail the check when the true required
+    # spacing is tighter than that minimum (a real design failure, not
+    # something rounding can paper over).
+    sv_prov = max(rounding.site_spacing(sv), 25.0)
+    ok = sv >= 25.0
     return {"tau_v": tau_v, "tau_c": tau_c, "tau_c_max": tau_cmax,
-            "Asv": Asv, "sv_calc": sv, "sv_provided": sv_prov,
-            "governing": governing, "ok": True}
+            "Asv": Asv, "sv_calc": sv, "sv_provided": int(sv_prov),
+            "governing": governing, "ok": ok}

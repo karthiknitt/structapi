@@ -231,7 +231,7 @@ def test_continuous_uses_continuous_deflection_ratio():
 # ---------------------------------------------------------------------------
 def _flags(**kw):
     r = design_building(storeys=2, sbc_kpa=150.0, **kw)
-    return r, {k[0]: v["continuous"] for k, v in r["beams"].items()}
+    return r, {k[0]: v["table12_continuous"] for k, v in r["beams"].items()}
 
 
 def test_gate_three_equal_spans_selects_continuous():
@@ -279,7 +279,7 @@ def test_building_continuous_end_to_end():
     r = design_building(x_spacings_m=[4.5, 4.5, 4.5],
                         y_spacings_m=[4.0, 4.0, 4.0],
                         storeys=3, sbc_kpa=180.0)
-    assert all(bm["continuous"] for bm in r["beams"].values())
+    assert all(bm["table12_continuous"] for bm in r["beams"].values())
     assert any("Table 12/13" in a for a in r["assumptions"])
     # simply-supported fallback is still advertised as available
     assert any("simply supported" in a for a in r["assumptions"])

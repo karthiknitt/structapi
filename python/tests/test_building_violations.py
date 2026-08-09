@@ -192,3 +192,39 @@ def test_slab_entries_carry_panel_indices(passing):
         assert isinstance(p["panel_indices"], list) and p["panel_indices"]
         for pair in p["panel_indices"]:
             assert len(pair) == 2
+
+
+# ---------------------------------------------------------------------------
+# Critical 1 regression — result["ok"] must be blind to no violation source.
+# uplift_violations / combined_footing_violations / the exposure-grade
+# violation are appended to `violations` AFTER all_checks_ok was originally
+# computed; the invariant result["ok"] == (result["violations"] == []) must
+# hold even when one of those three late-appended sources is what actually
+# fails the building.
+# ---------------------------------------------------------------------------
+
+def test_ok_false_when_only_exposure_grade_violation_present():
+    # Same reference building as `passing` (every member-level check
+    # passes), but fck is deliberately below the "severe" exposure minimum
+    # grade (IS 456 Table 5) -- the ONLY violation source is the
+    # building-level exposure/grade check appended after all_checks_ok is
+    # computed.
+    r = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, exposure="severe")
+    assert len(r["violations"]) >= 1
+    assert any(v["check"].startswith("fck >= exposure min grade")
+              for v in r["violations"])
+    assert r["ok"] == (r["violations"] == [])
+    assert r["ok"] is False
+
+
+def test_ok_true_iff_violations_empty_on_passing_building(passing):
+    assert passing["ok"] == (passing["violations"] == [])
+
+
+def test_ok_false_iff_violations_nonempty_on_failing_building(failing):
+    assert failing["ok"] == (failing["violations"] == [])

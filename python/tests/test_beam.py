@@ -137,6 +137,19 @@ def test_shear_section_inadequate():
     assert not r["ok"]
 
 
+def test_shear_sv_calc_below_25mm_fails_not_zero_stirrups():
+    # Critical 2 regression: rounding.site_spacing floors to the nearest 25
+    # mm with no lower bound, so an sv_calc below 25 mm used to collapse to
+    # sv_provided=0.0 with ok still True -- a "passing" design specifying
+    # zero stirrups. Confirmed repro from the review brief.
+    r = shear.design_stirrups(2400e3, b=1000, d=1000, fck=20, fy=500,
+                              Ast_mm2=8000)
+    assert r["sv_calc"] < 25.0
+    assert r["ok"] is False
+    assert r["sv_provided"] >= 25.0
+    assert isinstance(r["sv_provided"], int)
+
+
 # ---------------------------------------------------------------------------
 # design/beam.py (end-to-end)
 # ---------------------------------------------------------------------------
@@ -153,6 +166,43 @@ def test_design_beam_end_to_end():
     names = [n for n, _ in r["checks"]]
     assert any("deflection" in n for n in names)
     assert any("shear" in n for n in names)
+
+
+def test_design_beam_inputs_echo_includes_exposure():
+    # Minor 8 regression: every other BeamIn field is echoed in inputs;
+    # exposure was the one left out.
+    r = beamdesign.design_beam(span_m=6.0, w_dl_kn_m=15.0, w_il_kn_m=10.0,
+                               b=300, D=550, fck=25, fy=500, support="ss",
+                               exposure="severe")
+    assert r["inputs"]["exposure"] == "severe"
+
+
+def test_crack_width_uses_centre_to_centre_not_clear_spacing():
+    # Important 4 regression: crack_width_flexure()'s a_cr term needs
+    # centre-to-centre bar pitch, not clear spacing between bar faces.
+    # bar_spacing_mm (fed to crack_width_flexure) must be clear spacing +
+    # bar_dia; the separately-tracked bar_spacing_clear_mm (fed to the cl
+    # 26.3.3(b) deemed-to-satisfy check) must stay the clear-spacing value.
+    r = beamdesign.design_beam(span_m=6.0, w_dl_kn_m=15.0, w_il_kn_m=10.0,
+                               b=300, D=550, fck=25, fy=500, support="ss",
+                               exposure="moderate")
+    cw = r["design"]["crack_width"]
+    d_design = r["design"]
+    n_bars = d_design["n_bars"]
+    assert n_bars > 1, "need >1 bar for clear vs centre-to-centre to differ"
+    assert cw["bar_spacing_mm"] == pytest.approx(
+        cw["bar_spacing_clear_mm"] + d_design["bar_dia"])
+    assert cw["deemed_to_satisfy"]["actual_spacing_mm"] == pytest.approx(
+        cw["bar_spacing_clear_mm"])
+
+    # Recompute w_cr the OLD (buggy) way -- passing clear spacing straight
+    # into crack_width_flexure() -- and confirm the fixed value is strictly
+    # larger (using centre-to-centre under-predicted w_cr).
+    old_cw = svc.crack_width_flexure(
+        300, 550, d_design["d_mm"], d_design["Ast_prov_mm2"], 25,
+        cw["M_service_kNm"] * 1e6, 30, d_design["bar_dia"],
+        cw["bar_spacing_clear_mm"])
+    assert cw["crack_width_mm"] > old_cw["w_cr"]
 
 
 def test_design_beam_seismic_checks():
@@ -354,16 +404,23 @@ def test_crack_width_worked_example_matches_annex_f():
     M_service_kNm = Mu_bottom_kNm / 1.5
     assert M_service_kNm == pytest.approx(1.5 * 25 * 6 ** 2 / 8 / 1.5)  # 112.5
 
-    # clear spacing between bars in a single layer (brief's formula)
-    bar_spacing = (b - 2 * cover - 2 * stirrup_dia
-                  - n_bars * bar_dia) / (n_bars - 1)
-    assert bar_spacing == pytest.approx(d_design["crack_width"]["bar_spacing_mm"])
+    # clear spacing between bars in a single layer (cl 26.3.3(b) quantity)
+    bar_spacing_clear = (b - 2 * cover - 2 * stirrup_dia
+                         - n_bars * bar_dia) / (n_bars - 1)
+    assert bar_spacing_clear == pytest.approx(
+        d_design["crack_width"]["bar_spacing_clear_mm"])
+    # centre-to-centre pitch (Important 4 fix) -- what crack_width_flexure()'s
+    # a_cr term actually needs, fed into design_beam()'s crack_width dict as
+    # "bar_spacing_mm"
+    bar_spacing_ctc = bar_spacing_clear + bar_dia
+    assert bar_spacing_ctc == pytest.approx(
+        d_design["crack_width"]["bar_spacing_mm"])
 
     # independent Annex F computation via serviceability.py directly
     x = svc.cracked_section_na(b, d, Ast_prov, fck)
     fs = svc.steel_stress_service(M_service_kNm * 1e6, b, d, Ast_prov, fck)
     cw = svc.crack_width_flexure(b, D, d, Ast_prov, fck, M_service_kNm * 1e6,
-                                 cover, bar_dia, bar_spacing)
+                                 cover, bar_dia, bar_spacing_ctc)
 
     assert d_design["crack_width"]["steel_stress_service_MPa"] == pytest.approx(fs)
     assert d_design["crack_width"]["crack_width_mm"] == pytest.approx(cw["w_cr"])
