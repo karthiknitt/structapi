@@ -54,6 +54,28 @@ def test_bearing_capacity_factors_phi30():
     assert f["Ngamma"] == pytest.approx(22.4, abs=0.2)
 
 
+def test_sa_by_g_rock_spectrum():
+    """Type I (rock) spectrum per IS 1893 cl 6.4.2 — correct 1.00/T branch."""
+    # Ascending branch (T <= 0.40 s)
+    assert tables.sa_by_g(0.40, "rock") == pytest.approx(2.5, abs=0.005)
+
+    # Descending branch (0.40 < T <= 4.0 s)
+    assert tables.sa_by_g(1.0, "rock") == pytest.approx(1.00, abs=0.005)
+
+    # Floor (T > 4.0 s)
+    assert tables.sa_by_g(4.0, "rock") == pytest.approx(0.25, abs=0.005)
+    assert tables.sa_by_g(5.0, "rock") == pytest.approx(0.25, abs=0.005)
+
+    # Regression: medium and soft soil coefficients unchanged
+    assert tables.sa_by_g(1.0, "medium") == pytest.approx(1.36, abs=0.005)
+    assert tables.sa_by_g(1.0, "soft") == pytest.approx(1.67, abs=0.005)
+
+
+def test_importance_factor_table8():
+    assert tables.IMPORTANCE == {"ordinary": 1.0, "important_community": 1.2}
+
+
+
 # ---------------------------------------------------------------------------
 # materials.py
 # ---------------------------------------------------------------------------
@@ -98,6 +120,14 @@ def test_wind_pressure_50ms_cat2_10m():
     assert r.pz == pytest.approx(1.5, abs=0.01)     # 0.6*50^2 = 1500 N/m2
     assert r.pd == pytest.approx(1.35, abs=0.01)    # Kd=0.9
     assert r.pd >= 0.7 * r.pz
+
+
+def test_fundamental_period_steel_coefficient():
+    assert loads.fundamental_period(12.0, frame="steel") == pytest.approx(
+        0.080 * 12.0 ** 0.75, rel=1e-6)
+    # RC branch unaffected — regression guard
+    assert loads.fundamental_period(12.0, frame="rc") == pytest.approx(
+        0.075 * 12.0 ** 0.75, rel=1e-6)
 
 
 def test_seismic_base_shear_hand_calc():
@@ -174,11 +204,130 @@ def test_design_column_passes_reasonable_case():
     assert r.ok, r.checks
 
 
+def test_ductile_column_confining_hoops_worked_example():
+    """IS 13920:2016 cl 7.4.6 / 7.4.8 special confining reinforcement.
+
+    Hand-worked G+1 seismic column, M25 / Fe500, 300 x 450, 40 mm cover,
+    8-20 dia longitudinal bars:
+        pitch limits: min(b,D)/4 = 75 mm   <-- governs
+                      6 x 20     = 120 mm
+                      cl cap     = 100 mm
+                      -> s = 75 mm (already a multiple of 25)
+        core to hoop outer face: 450-80 = 370 mm (> 300 -> 1 crosstie,
+                                 2 segments, h = 185 mm)
+                                 300-80 = 220 mm
+        Ak = 370 x 220 = 81 400 mm2 ; Ag = 135 000 mm2 ; Ag/Ak - 1 = 0.658477
+        Ash = max(0.18 x 75 x 185 x (25/500) x 0.658477,
+                  0.05 x 75 x 185 x (25/500))
+            = max(82.23, 34.69) = 82.23 mm2
+        -> 8 dia hoop (50.3 mm2) FAILS, 12 dia hoop (113.1 mm2) PASSES.
+    """
+    b, D, fck, fy, cover, bar_dia = 300.0, 450.0, 25.0, 500.0, 40.0, 20.0
+    Ag_hand = b * D
+    Ak_hand = (D - 2 * cover) * (b - 2 * cover)
+    h_hand = (D - 2 * cover) / 2.0            # 370 / 2 segments (h <= 300)
+    s_hand = 75.0
+    ash_hand = max(0.18 * s_hand * h_hand * (fck / fy) * (Ag_hand / Ak_hand - 1),
+                   0.05 * s_hand * h_hand * (fck / fy))
+    assert Ak_hand == 81400.0
+    assert ash_hand == pytest.approx(82.23, abs=0.05)
+
+    kw = dict(b=b, D=D, fck=fck, fy=fy, Pu_kN=900, Mux_kNm=60,
+              L_unsupported_mm=3000, n_bars=8, bar_dia=bar_dia,
+              cover=cover, seismic=True)
+
+    r = column.design_column(tie_dia=12.0, **kw)
+    d = r.data
+    # spacing: the newly added min(b,D)/4 term is the binding limit
+    assert d["confine_spacing_limit"] == pytest.approx(75.0)
+    assert d["confine_spacing_limit"] < min(100.0, 6 * bar_dia)
+    assert d["confine_spacing_max"] == 75.0
+    assert d["confine_spacing_max"] % 25 == 0
+    assert d["confine_length_lo"] == pytest.approx(max(D, 3000 / 6, 450.0))
+    # hoop geometry + area
+    assert d["confine_hoop_h_mm"] == pytest.approx(h_hand)
+    assert d["confine_hoop_h_mm"] <= 300.0
+    assert d["confine_crossties_required"] is True
+    assert d["confine_core_Ak_mm2"] == pytest.approx(Ak_hand)
+    assert d["Ash_required_mm2"] == pytest.approx(ash_hand, rel=1e-9)
+    assert d["Ash_provided_mm2"] == pytest.approx(math.pi * 12.0 ** 2 / 4)
+    assert d["confine_hoop_dia_mm"] == 12.0
+    assert d["confine_hook"].startswith("135 deg bend")
+    ash_checks = [ok for n, ok in r.checks if "Ash" in n]
+    assert ash_checks == [True]
+
+    # undersized hoop -> the same check must fail
+    r8 = column.design_column(tie_dia=8.0, **kw)
+    assert r8.data["Ash_required_mm2"] == pytest.approx(ash_hand, rel=1e-9)
+    assert r8.data["Ash_provided_mm2"] < ash_hand
+    assert [ok for n, ok in r8.checks if "Ash" in n] == [False]
+    assert not r8.ok
+
+
+def test_ductile_column_confining_absent_when_not_seismic():
+    """Non-seismic regression guard for the cl 7.4 additions."""
+    r = column.design_column(b=300, D=450, fck=25, fy=500, Pu_kN=900,
+                             Mux_kNm=60, L_unsupported_mm=3000, n_bars=8,
+                             bar_dia=20, cover=40, tie_dia=8.0, seismic=False)
+    for k in ("Ash_required_mm2", "Ash_provided_mm2", "confine_hoop_dia_mm",
+              "confine_spacing_max", "confine_length_lo", "confine_hook"):
+        assert k not in r.data
+    assert not any("cl 7.4" in n for n, _ in r.checks)
+    # pre-existing IS 456 tie fields are untouched
+    assert r.data["tie_pitch_max"] % 25 == 0
+
+
 def test_design_column_fails_overloaded():
     r = column.design_column(b=300, D=300, fck=20, fy=415,
                              Pu_kN=3000, Mux_kNm=150,
                              L_unsupported_mm=3000, n_bars=4, bar_dia=16)
     assert not r.ok
+
+
+# ---------------------------------------------------------------------------
+# design/column.py -- IS 13920 cl 7.1.2 min-dimension trigger (seismic)
+# ---------------------------------------------------------------------------
+
+def test_design_column_seismic_lenient_200mm_when_short_span_and_length():
+    r = column.design_column(b=250, D=250, fck=25, fy=415,
+                             Pu_kN=500, Mux_kNm=20,
+                             L_unsupported_mm=3000, n_bars=8, bar_dia=16,
+                             seismic=True, max_beam_span_m=4.0)
+    assert r.data["min_dim_required"] == 200.0
+    assert r.data["strict_trigger"] is False
+    name, ok = next(c for c in r.checks if c[0].startswith("min width"))
+    assert ok  # 250 >= 200
+
+
+def test_design_column_seismic_strict_300mm_span_triggered():
+    r = column.design_column(b=250, D=250, fck=25, fy=415,
+                             Pu_kN=500, Mux_kNm=20,
+                             L_unsupported_mm=3000, n_bars=8, bar_dia=16,
+                             seismic=True, max_beam_span_m=6.0)
+    assert r.data["min_dim_required"] == 300.0
+    assert r.data["strict_trigger"] is True
+    name, ok = next(c for c in r.checks if c[0].startswith("min width"))
+    assert not ok  # 250 < 300
+
+
+def test_design_column_seismic_strict_300mm_length_triggered():
+    r = column.design_column(b=250, D=250, fck=25, fy=415,
+                             Pu_kN=500, Mux_kNm=20,
+                             L_unsupported_mm=4500, n_bars=8, bar_dia=16,
+                             seismic=True, max_beam_span_m=3.0)
+    assert r.data["min_dim_required"] == 300.0
+    assert r.data["strict_trigger"] is True
+    name, ok = next(c for c in r.checks if c[0].startswith("min width"))
+    assert not ok  # 250 < 300
+
+
+def test_design_column_non_seismic_has_no_min_width_check():
+    r = column.design_column(b=250, D=250, fck=25, fy=415,
+                             Pu_kN=500, Mux_kNm=20,
+                             L_unsupported_mm=4500, n_bars=8, bar_dia=16,
+                             seismic=False, max_beam_span_m=6.0)
+    assert not any(name.startswith("min width") for name, _ in r.checks)
+    assert "min_dim_required" not in r.data
 
 
 # ---------------------------------------------------------------------------

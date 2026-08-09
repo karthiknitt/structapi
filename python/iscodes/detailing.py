@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 
+from . import rounding
 from . import tables
 
 #: Standard bar areas (mm2) by diameter (mm)
@@ -74,11 +75,12 @@ def select_bars(ast_req_mm2: float, dia_pref: tuple = (16, 20, 25),
 
 def select_bar_spacing(ast_req_per_m: float, dia_pref: tuple = (8, 10, 12, 16),
                        max_spacing: float = 300.0, target_spacing: float = 150.0) -> tuple:
-    """Pick bar dia + spacing (rounded down to 5 mm) for a slab/wall face.
+    """Pick bar dia + spacing (rounded down to Site-Standard 25 mm) for a
+    slab/wall face.
 
     For each candidate diameter, raw spacing = area*1000/ast_req_per_m, capped
     at `max_spacing` (IS 456 cl 26.3.3(b): lesser of 3d or 300 mm), then rounded
-    down to the nearest 5 mm (rounding down keeps Ast_prov >= Ast_req). The
+    down to the nearest 25 mm (rounding down keeps Ast_prov >= Ast_req). The
     diameter whose resulting spacing is closest to `target_spacing` (a practical
     mid-range default, avoiding both over-congested and overly sparse bars) is
     selected.
@@ -87,9 +89,7 @@ def select_bar_spacing(ast_req_per_m: float, dia_pref: tuple = (8, 10, 12, 16),
     for dia in dia_pref:
         area = BAR_AREAS[dia]
         raw = area * 1000.0 / ast_req_per_m
-        capped = min(raw, max_spacing)
-        rounded = math.floor(capped / 5.0) * 5.0
-        rounded = max(rounded, 5.0)
+        rounded = max(rounding.site_spacing(raw, cap=max_spacing), 25.0)
         ast_prov = area * 1000.0 / rounded
         candidates.append((dia, rounded, ast_prov))
 
@@ -123,7 +123,7 @@ def ductile_beam_checks(b: float, D: float, pt: float, pc: float) -> list:
     """
     d = tables.DUCTILE
     checks = []
-    checks.append(("beam width >= 200 mm (IS13920 cl 6.1.3)", b >= d["beam_min_b"]))
+    checks.append(("beam width >= 200 mm (IS13920 cl 6.1.1)", b >= d["beam_min_b"]))
     checks.append(("b/D >= 0.3 (IS13920 cl 6.1.2)", D > 0 and b / D >= 0.3))
     checks.append(("max tension steel pt <= 2.5% (IS13920 cl 6.2.2)",
                    pt <= d["beam_max_pt"] * 100))
@@ -133,7 +133,7 @@ def ductile_beam_checks(b: float, D: float, pt: float, pc: float) -> list:
 
 
 def ductile_column_checks(b: float, D: float, hoop_spacing: float, bar_dia: float) -> list:
-    """Ductile column detailing sanity checks. IS 13920:2016 cl 7.1, 8.1."""
+    """Ductile column detailing sanity checks. IS 13920:2016 cl 7.1, 7.4.6."""
     d = tables.DUCTILE
     checks = []
     checks.append(("min column dimension >= 300 mm, if supporting > 2 storeys "
@@ -142,6 +142,6 @@ def ductile_column_checks(b: float, D: float, hoop_spacing: float, bar_dia: floa
                    max(b, D) > 0 and min(b, D) / max(b, D) >= 0.4))
     max_hoop_spacing = min(d["confine_spacing_max"], d["confine_spacing_6db"] * bar_dia)
     checks.append((f"hoop spacing <= min(100mm, 6*dia)={max_hoop_spacing:.0f} mm "
-                   "in confining length lo (IS13920 cl 8.1)",
+                   "in confining length lo (IS13920 cl 7.4.6)",
                    hoop_spacing <= max_hoop_spacing))
     return checks

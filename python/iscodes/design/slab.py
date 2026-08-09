@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 
+from .. import rounding
 from .. import tables
 from .. import serviceability as svc
 
@@ -23,7 +24,7 @@ def _ast_annex_g(Mu, b, d, fck, fy):
 
 def _spacing_for(ast_req_per_m: float, dia: int, cap: float) -> float:
     s = BAR_AREA[dia] * 1000.0 / max(ast_req_per_m, 1e-6)
-    return max(min(math.floor(s / 5.0) * 5.0, cap), 50.0)
+    return max(rounding.site_spacing(s, cap), 50.0)
 
 
 def _strip_design(Mu_Nmm_per_m: float, D: float, d: float, fck: float, fy: float,
@@ -56,14 +57,14 @@ def design_one_way_slab(lx_m: float, w_dl: float, w_il: float, fck: float,
     auto = D_mm is None
     if auto:
         d_trial = lx_m * 1000.0 / (base * 1.4)  # assume kt ~ 1.4 for slabs
-        D_mm = math.ceil((d_trial + cover + bar_dia / 2) / 10.0) * 10.0
+        D_mm = rounding.site_dimension(d_trial + cover + bar_dia / 2)
         D_mm = max(D_mm, 100.0)
     for _ in range(12):
         result = _one_way_once(lx_m, w_dl, w_il, fck, fy, support, D_mm,
                                cover, bar_dia)
         if result["ok"] or not auto:
             return result
-        D_mm += 10.0
+        D_mm += 25.0
     return result
 
 
@@ -116,13 +117,13 @@ def design_two_way_slab(lx_m: float, ly_m: float, w_dl: float, w_il: float,
     if auto:
         # cl 24.1: span/overall-depth 28 (ss) / 32 (cont) for HYSD as start
         base = 32.0 if case != 9 else 28.0
-        D_mm = max(math.ceil((lx_m * 1000.0 / base + 0) / 10.0) * 10.0, 100.0)
+        D_mm = max(rounding.site_dimension(lx_m * 1000.0 / base), 100.0)
     for _ in range(12):
         result = _two_way_once(lx_m, ly_m, r, w_dl, w_il, fck, fy, case,
                                corners_held, D_mm, cover, bar_dia)
         if result["ok"] or not auto:
             return result
-        D_mm += 10.0
+        D_mm += 25.0
     return result
 
 
@@ -163,6 +164,30 @@ def _two_way_once(lx_m, ly_m, r, w_dl, w_il, fck, fy, case, corners_held,
     tau_allow = tables.k_solid_slab(D_mm) * tables.tau_c(pt, fck)
     checks.append(("shear tau_v <= k*tau_c (cl 40.2.1.1)", tau_v <= tau_allow))
 
+    # shear, long-span edge (additive; PC-6): the block above uses the peak
+    # ordinate of the 45 deg yield-line load-dispersion pattern (2 triangles
+    # + 2 trapezoids per panel) -- that peak ordinate is w_u*lx/2 at BOTH the
+    # short-edge (triangle apex) and the long-edge (trapezoid plateau), so it
+    # is not itself reduced by r. What IS reduced by r is the *average*
+    # intensity the trapezoid delivers along the long-span edge's full
+    # length ly (total trapezoid load / ly): Vu_long = w_u*lx/2*(1-1/(2r)).
+    # Derivation: trapezoid area = (lx/4)(2*ly-lx) -> total load w_u*that ->
+    # /ly = w_u*lx/2*(1-lx/(2ly)) = w_u*lx/2*(1-1/(2r)). At r=1 this equals
+    # w_u*lx/4, i.e. HALF of the peak-based Vu above (not equal to it) --
+    # the two formulas measure different statistics (peak vs average) of
+    # the same load pattern, so exact numeric coincidence at r=1 is not
+    # expected; see task-PC-6-report.md for the verified 0.5x relationship
+    # and confidence notes. Checked against d_y/pt from the long-span
+    # (mid_long_y) steel -- the inner-layer, lower-pt direction -- so this
+    # check can fail even when the short-edge check above passes.
+    Vu_long_edge = w_u * lx_m / 2.0 * (1.0 - 1.0 / (2.0 * r))
+    tau_v_long_edge = Vu_long_edge * 1e3 / (1000.0 * d_y)
+    pt_y = (100 * out_strips.get("mid_long_y", {}).get("Ast_prov", 0)
+            / (1000.0 * d_y))
+    tau_allow_long_edge = tables.k_solid_slab(D_mm) * tables.tau_c(pt_y, fck)
+    checks.append(("shear tau_v <= k*tau_c, long edge (cl 40.2.1.1, "
+                   "trapezoid)", tau_v_long_edge <= tau_allow_long_edge))
+
     # deflection: short span governs (cl 24.1 note / 23.2)
     ast_ratio = 1.0
     s = out_strips["mid_short_x"]
@@ -184,4 +209,6 @@ def _two_way_once(lx_m, ly_m, r, w_dl, w_il, fck, fy, case, corners_held,
             "ly_by_lx": r, "case": case if corners_held else "D-2 (ss)",
             "D_mm": D_mm, "d_x_mm": d_x, "d_y_mm": d_y, "w_u_kN_m2": w_u,
             "strips": out_strips, "tau_v": tau_v, "tau_allow": tau_allow,
+            "Vu_long_edge_kN": Vu_long_edge, "tau_v_long_edge": tau_v_long_edge,
+            "tau_allow_long_edge": tau_allow_long_edge,
             "deflection": defl, "torsion_note": torsion_note}

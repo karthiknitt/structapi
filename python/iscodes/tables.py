@@ -346,7 +346,7 @@ def k2(height_m: float, terrain_category: int) -> float:
 
 ZONE_FACTOR = {"II": 0.10, "III": 0.16, "IV": 0.24, "V": 0.36}  # Table 3
 
-IMPORTANCE = {"ordinary": 1.0, "residential_large": 1.2, "important": 1.5}  # Table 8
+IMPORTANCE = {"ordinary": 1.0, "important_community": 1.2}  # Table 8
 
 RESPONSE_REDUCTION = {"OMRF": 3.0, "SMRF": 5.0,
                       "ordinary_shear_wall": 3.0, "ductile_shear_wall": 4.0,
@@ -364,7 +364,7 @@ def sa_by_g(T: float, soil: str = "medium") -> float:
     if T <= 0.10:
         return 1 + 15 * T
     if s in ("rock", "hard", "i", "type i"):
-        return 2.5 if T <= 0.40 else min(2.5, max(1.36 / T, 0.34 if T > 4 else 1.36 / T))
+        return 2.5 if T <= 0.40 else 1.00 / T if T <= 4.0 else 1.00 / 4
     if s in ("medium", "ii", "type ii"):
         return 2.5 if T <= 0.55 else 1.36 / T if T <= 4.0 else 1.36 / 4
     if s in ("soft", "iii", "type iii"):
@@ -434,6 +434,64 @@ STEEL_STRESS_DIRECT_TENSION_LIQUID = 100.0
 MIN_STEEL_SURFACE_ZONE_HYSD = 0.0035  # 0.35% of surface zone each face, each dirn
 MIN_STEEL_SURFACE_ZONE_MILD = 0.0064
 
+
+# ---------------------------------------------------------------------------
+# IS 456:2000 cl 43.1 — crack-width limit for ordinary RC members (not
+# liquid-retaining; those use the tighter IS 3370 limits above).
+#
+# cl 43.1: "the practical objective is to restrict the width of cracks... to
+# 0.3 mm" as the general limit. Where members are subject to a more
+# aggressive environment (cl 35.3.2 / Table 3 exposure classes 'severe',
+# 'very severe', 'extreme'), commentary/practice (SP:24, Pillai & Menon)
+# tightens this to 0.2 mm. This codebase already categorises exposure via
+# EXPOSURE (Table 5, mild/moderate/severe/very severe/extreme) for cover and
+# grade selection, so that same categorisation is reused here rather than
+# inventing a separate one: 'mild'/'moderate' -> 0.3 mm, everything harsher
+# -> 0.2 mm.
+# ---------------------------------------------------------------------------
+
+CRACK_LIMIT_GENERAL = 0.3       # mm — mild / moderate exposure, IS 456 cl 43.1
+CRACK_LIMIT_AGGRESSIVE = 0.2    # mm — severe / very severe / extreme exposure
+CRACK_AGGRESSIVE_EXPOSURES = {"severe", "very severe", "extreme"}
+
+
+def crack_limit_for_exposure(exposure: str) -> float:
+    """IS 456 cl 43.1 crack-width limit (mm) for the given Table 5 exposure
+    category (see CRACK_LIMIT_* docstring above for the mapping rationale)."""
+    return (CRACK_LIMIT_AGGRESSIVE if exposure in CRACK_AGGRESSIVE_EXPOSURES
+            else CRACK_LIMIT_GENERAL)
+
+
+# ---------------------------------------------------------------------------
+# IS 456:2000 cl 43.1 / cl 26.3.3(b) — deemed-to-satisfy crack control via
+# maximum clear spacing of tension reinforcement in beams.
+#
+# cl 43.1 notes that compliance with the tension-reinforcement spacing rules
+# of cl 26.3.2/26.3.3 is generally sufficient to keep flexural crack widths
+# within the cl 43.1 limit without an explicit Annex F calculation. cl
+# 26.3.3(b) tabulates maximum clear spacing by fy and percentage moment
+# redistribution; this model does not track moment redistribution, so the
+# conservative 0%-redistribution column is used (approximation, documented
+# in the beam.py call site).
+# ---------------------------------------------------------------------------
+
+MAX_BAR_SPACING_TENSION = {250: 300.0, 415: 180.0, 500: 150.0}  # mm, 0% redistribution
+
+
+def max_bar_spacing_tension(fy: float) -> float:
+    """Deemed-to-satisfy max clear spacing (mm) of tension bars, cl 26.3.3(b),
+    0% redistribution column. Interpolates between the tabulated fy grades."""
+    grades = sorted(MAX_BAR_SPACING_TENSION)
+    if fy <= grades[0]:
+        return MAX_BAR_SPACING_TENSION[grades[0]]
+    if fy >= grades[-1]:
+        return MAX_BAR_SPACING_TENSION[grades[-1]]
+    for lo, hi in zip(grades, grades[1:]):
+        if lo <= fy <= hi:
+            s_lo, s_hi = MAX_BAR_SPACING_TENSION[lo], MAX_BAR_SPACING_TENSION[hi]
+            return s_lo + (s_hi - s_lo) * (fy - lo) / (hi - lo)
+    return MAX_BAR_SPACING_TENSION[grades[-1]]  # unreachable, defensive
+
 TANK_MIN_FCK = 30.0     # M30 min for liquid-retaining RC
 TANK_MAX_WC = 0.45
 TANK_MIN_COVER = 45.0   # mm, liquid face
@@ -500,10 +558,9 @@ def bearing_capacity_factors(phi_deg: float) -> dict:
 # ---------------------------------------------------------------------------
 
 DUCTILE = {
-    "beam_min_b": 200.0,           # mm, cl 6.1.3
+    "beam_min_b": 200.0,           # mm, cl 6.1.1
     "beam_max_pt": 0.025,          # cl 6.2.2
     "column_min_b_storeys": 300.0, # mm, columns supporting > 2 storeys
-    "strong_column_factor": 1.4,   # sum Mc >= 1.4 sum Mb, cl 7.2.1
-    "confine_spacing_max": 100.0,  # mm hoop spacing in lo, cl 8.1
+    "confine_spacing_max": 100.0,  # mm hoop spacing in lo, cl 7.4.6
     "confine_spacing_6db": 6.0,    # 6 x smallest long. bar dia
 }

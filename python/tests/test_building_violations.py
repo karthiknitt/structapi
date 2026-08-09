@@ -14,7 +14,9 @@ from iscodes.design.building import design_building
 
 ALLOWED_REMEDIES = {"reduce_span", "increase_section", "add_grid_line",
                     "increase_sbc", "increase_grade", "review_inputs"}
-ALLOWED_MEMBER_TYPES = {"beam", "column", "slab", "footing"}
+# "building" = whole-building-scope checks (e.g. fck vs exposure min grade,
+# IS 456 Table 5) that don't belong to any single member.
+ALLOWED_MEMBER_TYPES = {"beam", "column", "slab", "footing", "building"}
 
 
 def _pass_kwargs():
@@ -106,8 +108,13 @@ def test_violation_schema(failing):
 def test_violation_actual_exceeds_limit_where_finite(failing):
     # every mapped check here is an "actual <= limit" style clause, so a
     # violation with both values finite must show actual > limit.
+    # Exception: member_type="building" (e.g. fck vs exposure min grade) is a
+    # "actual >= limit" style clause instead — its shortfall direction is
+    # inverted (actual < limit on violation), so it's excluded here.
     checked_any = False
     for v in failing["violations"]:
+        if v["member_type"] == "building":
+            continue
         a, lim = v["actual"], v["limit"]
         if a is None or lim is None:
             continue
@@ -131,6 +138,24 @@ def test_grid_lines_deterministic_and_shaped(failing):
     gl = failing["grid_lines"]
     assert gl["x_coords_m"] == [0.0, 12.0, 24.0]
     assert gl["y_coords_m"] == [0.0, 12.0]
+
+
+# ---------------------------------------------------------------------------
+# PA-5: IS 456 Table 5 exposure enforcement — grade-vs-exposure violation
+# ---------------------------------------------------------------------------
+
+def test_exposure_grade_violation_when_fck_below_min():
+    # severe exposure requires min_fck=30 (tables.EXPOSURE); fck=20 is
+    # durability-inadequate and must surface as a building-level violation.
+    r = design_building(**{**_pass_kwargs(), "exposure": "severe", "fck": 20})
+    grade_violations = [v for v in r["violations"]
+                        if v["remedy_hint"] == "increase_grade"
+                        and v["member_type"] == "building"]
+    assert len(grade_violations) == 1
+    v = grade_violations[0]
+    assert "severe" in v["check"]
+    assert v["actual"] == 20.0
+    assert v["limit"] == 30.0
 
 
 # ---------------------------------------------------------------------------
@@ -167,3 +192,39 @@ def test_slab_entries_carry_panel_indices(passing):
         assert isinstance(p["panel_indices"], list) and p["panel_indices"]
         for pair in p["panel_indices"]:
             assert len(pair) == 2
+
+
+# ---------------------------------------------------------------------------
+# Critical 1 regression — result["ok"] must be blind to no violation source.
+# uplift_violations / combined_footing_violations / the exposure-grade
+# violation are appended to `violations` AFTER all_checks_ok was originally
+# computed; the invariant result["ok"] == (result["violations"] == []) must
+# hold even when one of those three late-appended sources is what actually
+# fails the building.
+# ---------------------------------------------------------------------------
+
+def test_ok_false_when_only_exposure_grade_violation_present():
+    # Same reference building as `passing` (every member-level check
+    # passes), but fck is deliberately below the "severe" exposure minimum
+    # grade (IS 456 Table 5) -- the ONLY violation source is the
+    # building-level exposure/grade check appended after all_checks_ok is
+    # computed.
+    r = design_building(
+        x_spacings_m=[3.5, 4.0, 3.5], y_spacings_m=[4.0, 4.5],
+        storeys=2, storey_height_m=3.0,
+        occupancy="residential_room", city="chennai",
+        seismic_zone="III", terrain_category=3, soil="medium",
+        sbc_kpa=200, fck=25, fy=500, exposure="severe")
+    assert len(r["violations"]) >= 1
+    assert any(v["check"].startswith("fck >= exposure min grade")
+              for v in r["violations"])
+    assert r["ok"] == (r["violations"] == [])
+    assert r["ok"] is False
+
+
+def test_ok_true_iff_violations_empty_on_passing_building(passing):
+    assert passing["ok"] == (passing["violations"] == [])
+
+
+def test_ok_false_iff_violations_nonempty_on_failing_building(failing):
+    assert failing["ok"] == (failing["violations"] == [])

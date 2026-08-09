@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .. import rounding
 from .. import tables
 
 
@@ -44,9 +45,8 @@ def _bar_for_strip(ast_per_m: float, dias=(8, 10, 12, 16, 20, 25),
     ast_per_m = max(ast_per_m, 1.0)
     for dia in dias:
         a = math.pi * dia ** 2 / 4.0
-        s = math.floor(a / ast_per_m * 1000.0 / 5.0) * 5.0
+        s = rounding.site_spacing(a / ast_per_m * 1000.0, cap=s_max)
         if s >= s_min:
-            s = min(s, s_max)
             return {"dia": dia, "spacing": s, "ast_prov": a * 1000.0 / s}
     dia = dias[-1]
     a = math.pi * dia ** 2 / 4.0
@@ -59,13 +59,23 @@ def _bar_for_strip(ast_per_m: float, dias=(8, 10, 12, 16, 20, 25),
 
 def safe_bearing_capacity(c_kpa: float, phi_deg: float, gamma: float = 18.0,
                           B: float = 1.5, L: float = 1.5, Df: float = 1.5,
-                          FOS: float = 2.5, water_table: str = "deep") -> dict:
+                          FOS: float | None = None,
+                          load_tested: bool = False,
+                          water_table: str = "deep") -> dict:
     """Net safe bearing capacity per IS 6403 general shear equation.
 
     qu_net = c Nc sc dc + q(Nq-1) sq dq + 0.5 gamma B Ngamma sgamma W'
     with q = gamma * Df (effective overburden). Returns qu_net and q_safe
     (kPa). Shape (cl 5.1.1 rect), depth and water-table factors as flagged.
+
+    FOS: if not given, resolved from `load_tested` — IS 6403:1981 standard
+    practice is FOS = 3.0 for a normal (non-load-tested) site
+    investigation, and FOS = 2.5 only when the bearing capacity has been
+    confirmed by an actual plate load test. An explicit `FOS=` always wins
+    over `load_tested`.
     """
+    if FOS is None:
+        FOS = 2.5 if load_tested else 3.0
     f = tables.bearing_capacity_factors(phi_deg)
     Nc, Nq, Ng = f["Nc"], f["Nq"], f["Ngamma"]
     q = gamma * Df
@@ -93,6 +103,7 @@ def safe_bearing_capacity(c_kpa: float, phi_deg: float, gamma: float = 18.0,
     return {"qu_net": qu_net, "q_safe": q_safe,
             "Nc": Nc, "Nq": Nq, "Ngamma": Ng,
             "sc": sc, "sq": sq, "sgamma": sg, "dc": dc, "dq": dq, "W_prime": Wd,
+            "FOS_used": FOS, "load_tested": load_tested,
             "note": "IS 6403:1981 general shear; net values (surcharge removed)."}
 
 
@@ -123,7 +134,7 @@ def design_isolated_footing(P_service_kN: float, M_service_kNm: float,
     # ---- 1. plan sizing (service): A = 1.1 P / sbc, then satisfy pressure ----
     A_req = 1.1 * P / sbc_kpa
     side = math.sqrt(A_req)
-    L = B = math.ceil(side / 0.05) * 0.05  # L along bending, B transverse
+    L = B = rounding.site_dimension(side * 1000.0) / 1000.0  # L along bending, B transverse
 
     # Development-length floor on the plan size (cl 26.2.1 / 34.2.4.3).
     # Step 6 below auto-selects a smaller bar when anchorage is tight, but it
@@ -136,7 +147,7 @@ def design_isolated_footing(P_service_kN: float, M_service_kNm: float,
     # growing both would oversize every footing on the plot.
     _DIA_MIN = 8.0
     _proj_req = tables.development_length(_DIA_MIN, fy, fck) - 8.0 * _DIA_MIN + cover
-    L = max(L, math.ceil((col_D_mm + 2 * _proj_req) / 1000.0 / 0.05) * 0.05)
+    L = max(L, rounding.site_dimension(col_D_mm + 2 * _proj_req) / 1000.0)
 
     for _ in range(400):
         A = L * B
@@ -213,7 +224,7 @@ def design_isolated_footing(P_service_kN: float, M_service_kNm: float,
                              {"L_m": L, "B_m": B, "note": "no d <= 2.5 m satisfied shear"})
 
     d = result["d"]
-    D_overall = math.ceil((d + cover + bar_dia) / 25.0) * 25.0
+    D_overall = rounding.site_dimension(d + cover + bar_dia)
 
     # ---- 4. flexure steel + minimums (0.12 % of B * D_overall) ----
     Ast_x = result["Ast_x"]
@@ -327,7 +338,7 @@ def design_combined_footing(P1_kN: float, P2_kN: float, spacing_m: float,
             L = 2.0 * max(xr, spacing_m - xr) + 2 * margin_m
     else:
         L = 2.0 * max(xr, spacing_m - xr) + 2 * margin_m
-    B = math.ceil((A_req / L) / 0.05) * 0.05
+    B = rounding.site_dimension((A_req / L) * 1000.0) / 1000.0
     A = L * B
 
     col1_pos = L / 2.0 - xr                         # from left edge
@@ -356,10 +367,10 @@ def design_combined_footing(P1_kN: float, P2_kN: float, spacing_m: float,
     Mu_gov = max(abs(M_hog), abs(M_sag)) * 1e6  # N.mm
     Q = tables.mu_lim_factor(fy)
     d_flex = math.sqrt(Mu_gov / (0.75 * Q * fck * B_mm))  # 75% utilization
-    d = max(300.0, math.ceil(d_flex / 25.0) * 25.0)
+    d = max(300.0, rounding.site_dimension(d_flex))
     while d <= 2500.0 and V_max * 1e3 / (B_mm * d) > tables.tau_c_max(fck):
         d += 25.0
-    D_overall = math.ceil((d + cover + bar_dia) / 25.0) * 25.0
+    D_overall = rounding.site_dimension(d + cover + bar_dia)
 
     # ---- longitudinal steel (Annex G) ----
     ast_top = _ast_annex_g(abs(M_hog) * 1e6, B_mm, d, fck, fy) or 0.0

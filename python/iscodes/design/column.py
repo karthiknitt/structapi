@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .. import rounding
 from .. import tables
 from ..materials import Concrete, Steel
 
@@ -163,7 +164,8 @@ def design_column(b: float, D: float, fck: float, fy: float,
                   L_unsupported_mm: float | None = None,
                   n_bars: int = 8, bar_dia: float = 20.0,
                   cover: float = 40.0, tie_dia: float = 8.0,
-                  seismic: bool = False) -> ColumnCheck:
+                  seismic: bool = False,
+                  max_beam_span_m: float = 0.0) -> ColumnCheck:
     """Full column check for a trial reinforcement. All lengths mm.
 
     lex/ley: effective lengths (mm). Returns pass/fail per clause with data.
@@ -233,17 +235,62 @@ def design_column(b: float, D: float, fck: float, fy: float,
 
     # ties, cl 26.5.3.2(c)
     tie_min = max(bar_dia / 4, 6.0)
-    pitch_max = min(min(b, D), 16 * bar_dia, 300.0)
+    pitch_max = rounding.site_spacing(min(min(b, D), 16 * bar_dia, 300.0))
     data.update(tie_dia=tie_dia, tie_dia_min=tie_min, tie_pitch_max=pitch_max)
     checks.append(("tie dia >= max(db/4, 6) (cl 26.5.3.2c-1)", tie_dia >= tie_min))
 
     # IS 13920 overlay
     if seismic:
-        checks.append(("min width 300 for >2 storey support (IS 13920 cl 7.1)",
-                       min(b, D) >= tables.DUCTILE["column_min_b_storeys"]))
+        # cl 7.1.2 -- the 300mm minimum only kicks in when the column
+        # supports a beam of span > 5m, or has an unsupported length > 4m;
+        # otherwise the ordinary IS 456 minimum-practical-dimension of
+        # 200mm governs.
+        strict_trigger = max_beam_span_m > 5.0 or (L_unsupported_mm or 0.0) > 4000.0
+        min_dim_required = (tables.DUCTILE["column_min_b_storeys"]
+                            if strict_trigger else 200.0)
+        data.update(strict_trigger=strict_trigger,
+                    min_dim_required=min_dim_required)
+        checks.append((f"min width {min_dim_required:.0f} per span/length trigger "
+                       f"(IS 13920 cl 7.1.2)", min(b, D) >= min_dim_required))
+        # cl 7.4.1 -- length of the special confining zone from each joint face
         lo = max(max(b, D), L / 6, 450.0)
-        s_conf = min(tables.DUCTILE["confine_spacing_max"],
-                     tables.DUCTILE["confine_spacing_6db"] * bar_dia)
-        data.update(confine_length_lo=lo, confine_spacing_max=s_conf)
+        # cl 7.4.6 -- hoop pitch in lo: smallest of min(b,D)/4, 6*dia_smallest
+        # and 100 mm, but need not be taken less than 75 mm.
+        s_conf_limit = max(min(min(b, D) / 4.0,
+                               tables.DUCTILE["confine_spacing_6db"] * bar_dia,
+                               tables.DUCTILE["confine_spacing_max"]), 75.0)
+        s_conf = rounding.site_spacing(s_conf_limit)
+
+        # cl 7.4.8 -- area of the bar forming the rectangular confining hoop.
+        # h = longer dimension of the hoop measured to its outer face, which
+        # the clause requires to be <= 300 mm; where the core exceeds 300 mm
+        # crossties are provided, splitting it into equal segments.
+        core_long = max(max(b, D) - 2 * cover, 0.0)
+        core_short = max(min(b, D) - 2 * cover, 0.0)
+        n_seg = max(1, math.ceil(core_long / 300.0)) if core_long > 0 else 1
+        h_hoop = core_long / n_seg
+        Ak = core_long * core_short          # confined core, to hoop outer face
+        if Ak > 0:
+            Ash_req = max(0.18 * s_conf * h_hoop * (fck / fy) * (Ag / Ak - 1.0),
+                          0.05 * s_conf * h_hoop * (fck / fy))
+        else:
+            Ash_req = float("inf")
+        Ash_prov = math.pi * tie_dia ** 2 / 4.0
+        data.update(confine_length_lo=lo, confine_spacing_max=s_conf,
+                    confine_spacing_limit=s_conf_limit,
+                    confine_hoop_dia_mm=tie_dia,
+                    confine_hoop_h_mm=h_hoop,
+                    confine_core_Ak_mm2=Ak,
+                    confine_crossties_required=n_seg > 1,
+                    confine_hoop_segments=n_seg,
+                    Ash_required_mm2=Ash_req,
+                    Ash_provided_mm2=Ash_prov,
+                    confine_hook="135 deg bend, extend 10*dia beyond bend, "
+                                 "closed hoop")
+        checks.append(("IS 13920 confining hoop spacing <= "
+                       "min(min(b,D)/4, 6*dia, 100) (cl 7.4.6)",
+                       0 < s_conf <= s_conf_limit))
+        checks.append(("IS 13920 confining hoop Ash >= required (cl 7.4.8)",
+                       Ash_prov >= Ash_req))
 
     return ColumnCheck(all(ok for _, ok in checks), checks, data)
