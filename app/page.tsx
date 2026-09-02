@@ -83,7 +83,7 @@ export default function Page() {
       <ChatInput
         disabled={busy}
         onSend={(text) => {
-          void agent.send({ message: text });
+          void agent.send(text);
         }}
       />
     </div>

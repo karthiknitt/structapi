@@ -6,6 +6,7 @@ const COLORS: Record<UseEveAgentStatus, string> = {
   ready: "var(--green)",
   submitted: "var(--amber)",
   streaming: "var(--amber)",
+  resuming: "var(--amber)",
   error: "var(--red)",
 };
 
@@ -13,6 +14,7 @@ const LABELS: Record<UseEveAgentStatus, string> = {
   ready: "Ready",
   submitted: "Sending",
   streaming: "Streaming",
+  resuming: "Resuming",
   error: "Error",
 };
 
@@ -35,7 +37,9 @@ export function StatusDot({ status }: { status: UseEveAgentStatus }) {
           borderRadius: "50%",
           background: color,
           boxShadow:
-            status === "streaming" || status === "submitted"
+            status === "streaming" ||
+            status === "submitted" ||
+            status === "resuming"
               ? `0 0 0 3px ${color}22`
               : "none",
           transition: "box-shadow 0.2s ease",
