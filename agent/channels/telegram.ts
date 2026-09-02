@@ -11,17 +11,22 @@ import {
 // other senders) is dropped. Text replies use eve's default
 // `message.completed` -> sendMessage handler (each completed assistant
 // step lands as its own message, which reads as progressive/streaming
-// output for a multi-subagent design run). PDF design reports exported by
-// the specialist subagents (via `export_artifact`, into
-// `outputs/<sessionId>/...pdf`) are pushed into the chat as a Telegram
-// document once the turn completes.
+// output for a multi-subagent design run). PDF design reports and PNG
+// diagrams (SFD/BMD charts, etc.) exported by the specialist subagents
+// (via `export_artifact`, into `outputs/<sessionId>/...`) are pushed into
+// the chat as Telegram documents once the turn completes.
 const OWNER_ID = process.env.TELEGRAM_OWNER_ID;
 const OUTPUTS_DIR = join(process.cwd(), "outputs");
 
 const turnStartedAt = new Map<string, number>();
-const sentPdfPaths = new Set<string>();
+const sentAttachmentPaths = new Set<string>();
 
-function findUnsentPdfs(sinceMs: number): string[] {
+const ATTACHMENT_MIME: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".png": "image/png",
+};
+
+function findUnsentAttachments(sinceMs: number): string[] {
   const found: string[] = [];
   const walk = (dir: string) => {
     let entries;
@@ -34,24 +39,29 @@ function findUnsentPdfs(sinceMs: number): string[] {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
         walk(full);
-      } else if (entry.isFile() && entry.name.endsWith(".pdf")) {
-        if (sentPdfPaths.has(full)) continue;
-        if (statSync(full).mtimeMs >= sinceMs) found.push(full);
+        continue;
       }
+      if (!entry.isFile()) continue;
+      const ext = entry.name.slice(entry.name.lastIndexOf(".")).toLowerCase();
+      if (!(ext in ATTACHMENT_MIME)) continue;
+      if (sentAttachmentPaths.has(full)) continue;
+      if (statSync(full).mtimeMs >= sinceMs) found.push(full);
     }
   };
   walk(OUTPUTS_DIR);
   return found;
 }
 
-async function sendTelegramPdf(chatId: string, filePath: string) {
+async function sendTelegramDocument(chatId: string, filePath: string) {
   const token = await resolveTelegramBotToken();
+  const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
+  const mime = ATTACHMENT_MIME[ext] ?? "application/octet-stream";
   const form = new FormData();
   form.set("chat_id", chatId);
   form.set(
     "document",
-    new Blob([readFileSync(filePath)], { type: "application/pdf" }),
-    filePath.split("/").pop() ?? "report.pdf",
+    new Blob([readFileSync(filePath)], { type: mime }),
+    filePath.split("/").pop() ?? `attachment${ext}`,
   );
   const res = await fetch(
     `https://api.telegram.org/bot${token}/sendDocument`,
@@ -87,9 +97,9 @@ export default telegramChannel({
       turnStartedAt.delete(data.turnId);
 
       const chatId = channel.telegram.chatId;
-      for (const pdfPath of findUnsentPdfs(startedAt - 2_000)) {
-        sentPdfPaths.add(pdfPath);
-        await sendTelegramPdf(chatId, pdfPath);
+      for (const path of findUnsentAttachments(startedAt - 2_000)) {
+        sentAttachmentPaths.add(path);
+        await sendTelegramDocument(chatId, path);
       }
     },
   },
