@@ -3,3 +3,5 @@ allowBuilds:
   cbor-extract: true
   esbuild: true
   sharp: true
+minimumReleaseAgeExclude:
+  - eve@0.49.0

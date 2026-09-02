@@ -138,7 +138,13 @@ host** (`pnpm dev` / `pnpm tui`) to apply. Precedence: config/models.json →
   test user on the OAuth consent screen (External/Testing mode).
 - **400 "Unhandled queue"** → `WORKFLOW_QUEUE_NAMESPACE` must be exactly `eve`.
 - **Runs break mid-flight after a dependency change** → `@workflow/world-postgres`
-  must stay pinned to `5.0.0-beta.19` (matches eve 0.15.0's workflow core).
+  must stay on a version whose `@workflow/world` dependency matches the one
+  vendored inside the installed `eve` package (currently
+  `@workflow/world-postgres@5.0.0-beta.39` for `eve@0.49.0` — check
+  `node_modules/eve/package.json`'s vendored `@workflow/world` version
+  before bumping either package).
+- **`eve requires Node.js >=24`** → eve 0.49+ enforces this hard; install
+  Node 24+ (older versions used to just warn).
 - **`run_python` fails: image not found** → step 5 wasn't run on this machine.
 - **`ModuleNotFoundError: iscodes` in the sandbox** → run `pnpm sync`.
 - **Auth redirect loop** → `BETTER_AUTH_URL` must match the origin you open

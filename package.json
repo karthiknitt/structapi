@@ -32,17 +32,17 @@
   "dependencies": {
     "@ai-sdk/openai": "3.0.74",
     "@vercel/connect": "0.2.2",
-    "@workflow/world-postgres": "5.0.0-beta.19",
-    "ai": "7.0.0-beta.178",
+    "@workflow/world-postgres": "5.0.0-beta.39",
+    "ai": "7.0.87",
     "better-auth": "^1.6.23",
-    "eve": "0.15.0",
+    "eve": "0.49.0",
     "next": "^16.2.10",
     "pg": "^8.22.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "workflow": "4.5.0",
+    "workflow": "4.8.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {

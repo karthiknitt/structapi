@@ -35,6 +35,7 @@ IS 456:2000 (LSM) · SP 16 · IS 875 Parts 1-3 (wind 2015) · IS 1893 Part 1:201
 | Doc | Contents |
 |---|---|
 | [SETUP.md](SETUP.md) | **Complete new-machine runbook** for the StructAgent app: prerequisites, copy/clone, env, Google OAuth (optional), DB + auth migrations, seeded test users, sandbox image, model settings, smoke tests, troubleshooting |
+| [docs/DEPLOY-TELEGRAM.md](docs/DEPLOY-TELEGRAM.md) | Self-hosted production runbook for the private, owner-only Telegram bot channel (`agent/channels/telegram.ts`) — VM prerequisites, @BotFather setup, reverse proxy + TLS, webhook registration |
 | [docs/PLANFORGE-INTEGRATION.md](docs/PLANFORGE-INTEGRATION.md) | Architecture decision + phased plan for the PlanForge integration; the frozen structapi v1 envelope contract |
 | `/docs` on a running structapi | Auto-generated OpenAPI reference for every endpoint |
 | [AGENTS.md](AGENTS.md) / agent `instructions.md` files | Eve agent behavior; per-specialist rules |
