@@ -10,5 +10,7 @@ Vercel's durable agent framework (Eve) orchestrates structural design via 8 spec
 
 ## Gotchas
 
-- Agent instructions (`instructions.md`) encode the orchestration contract — sequence (loads first, then vertical, then column, then footing), batching (subagents share nothing; pass all context explicitly), and seismic zone routing (IS 13920 for zones III-V). Keep them in sync with `agent/instructions.md`.
+- Agent instructions (`instructions.md`) encode the orchestration contract — sequence (loads first, then vertical, then column, then footing), batching (subagents share nothing; pass all context explicitly), and seismic zone routing (IS 13920 for zones III-V). Keep them in sync with `agent/instructions.md`. It also carries the RCC-only scope guardrail (refuse anything else) shared by every channel.
 - Cold starts: First call after idle adds ~5–10s (structapi) or longer (Eve state load). Agent sandbox spins up from image on first use per session.
+- **eve requires Node >=24** (enforced hard since the 0.49.0 upgrade) — `eve dev`/`build`/`start` refuse to run on older Node.
+- **Telegram channel** (`agent/channels/telegram.ts`) is a private, owner-only bot: `onMessage` drops anything not from a private chat with `from.id === TELEGRAM_OWNER_ID`. It doesn't touch text delivery (eve's default `message.completed` → `sendMessage` handler is left as-is); it adds a `turn.completed` handler that scans `outputs/**/*.pdf` for files written since the turn started and pushes each into the chat via a hand-rolled multipart `sendDocument` call (the typed Telegram API helpers only support JSON bodies, not file upload). See `docs/DEPLOY-TELEGRAM.md` for the production runbook.

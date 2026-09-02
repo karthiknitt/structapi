@@ -1,4 +1,4 @@
 {
-  "orchestrator": "anthropic/claude-sonnet-5",
-  "subagents": "anthropic/claude-sonnet-5"
+  "orchestrator": "openrouter/auto",
+  "subagents": "openrouter/auto"
 }
