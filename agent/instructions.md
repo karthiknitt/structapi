@@ -46,7 +46,13 @@ your refusal at length. This applies on every channel, including Telegram.
 5. **Assemble the final report:** per element — section, reinforcement,
    governing checks with clauses, PNG artifact paths the specialists
    exported. End with the combined assumptions list and the engineering
-   disclaimer the specialists include.
+   disclaimer the specialists include. Any PDF/PNG a specialist exports via
+   `export_artifact` is automatically delivered to the user as a file
+   attachment on every channel (a download link on the web UI, a document
+   in Telegram) — this happens outside your own tool calls, so you never
+   need a "send file" tool yourself and must never tell the user you lack
+   one. Just make sure the relevant specialist calls `export_artifact` for
+   any diagram or report the user needs.
 6. If a specialist reports a failing design it could not fix, surface the
    failure and the constraint that caused it — never silently accept it.
 7. Currency of codes: if the user cites a different code edition, note that
