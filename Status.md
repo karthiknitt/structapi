@@ -1,29 +1,27 @@
 # StructAgent + structapi — Status
 
-**Last updated:** 2026-07-28
-**Release:** `v0.3.1` tagged, image published to GHCR
-**Current workstream:** public release + documentation overhaul
-(companion plan lives in the PlanForge repo:
-`docs/plans/2026-07-27-public-release-docs-overhaul.md`)
+**Last updated:** 2026-09-03
+**Release:** `v0.4.0` tagged, image published to GHCR (`latest` + `0.4.0`), rolled out to
+Cloud Run
+**Current workstream:** G+1 practice alignment sprint (`docs/plans/2026-08-04-g1-practice-alignment.md`,
+execution plan `docs/plans/2026-08-05-g1-practice-alignment-execution.md`) — **complete**,
+all 24 tasks (PA-1..PD-6, Phases 1-4) merged to `main` and released as v0.4.0.
 
 ## Live service
 
 | Component | URL | Health |
 |---|---|---|
-| structapi | https://structapi-912195238699.us-central1.run.app | `/v1/health` → `{"status":"ok","api_version":"1","iscodes_version":"0.3.0"}` |
+| structapi | https://structapi-912195238699.us-central1.run.app | `/v1/health` → `{"status":"ok","api_version":"1","iscodes_version":"0.4.0"}` |
 
-> **Deployment gap:** the live Cloud Run revision serves `iscodes` **0.3.0**. Tag `v0.3.1`
-> (isolated-footing development-length sizing) is released and its image is published,
-> but has not been rolled out. Roll it out before pointing anyone at the live endpoint
-> for footing behaviour.
+No deployment gap — the live Cloud Run revision matches the tagged/vendored release.
 
 Consumed in production by [PlanForge](https://github.com/karthiknitt/planforge) over the
 frozen v1 envelope. PlanForge vendors a pinned copy in `structapi-service/`, byte-diffed
-against the tag by CI on every push and PR.
+against the tag by CI on every push and PR. Pinned at **v0.4.0** (`structapi-service/VENDORED.md`).
 
 ## Test state
 
-- **94 tests, all passing** — verified locally 2026-07-28 (1m55s)
+- **328 tests, all passing** — verified locally 2026-09-03 (5m22s)
 - CI green on `main`; contract freeze enforced by
   `python/tests/fixtures/beam_envelope_v1.json` (CI fails on any v1 envelope drift)
 
