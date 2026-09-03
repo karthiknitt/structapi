@@ -6,16 +6,24 @@ import {
   telegramChannel,
 } from "eve/channels/telegram";
 
-// PRIVATE, OWNER-ONLY BOT. Only a private-chat message from
-// TELEGRAM_OWNER_ID is dispatched to the agent; everything else (groups,
+// PRIVATE, ALLOWLISTED BOT. Only a private-chat message from a user id in
+// TELEGRAM_ALLOWED_USER_IDS (comma-separated; falls back to the single
+// TELEGRAM_OWNER_ID) is dispatched to the agent; everything else (groups,
 // other senders) is dropped. Text replies use eve's default
 // `message.completed` -> sendMessage handler (each completed assistant
 // step lands as its own message, which reads as progressive/streaming
 // output for a multi-subagent design run). PDF design reports and PNG
 // diagrams (SFD/BMD charts, etc.) exported by the specialist subagents
 // (via `export_artifact`, into `outputs/<sessionId>/...`) are pushed into
-// the chat as Telegram documents once the turn completes.
-const OWNER_ID = process.env.TELEGRAM_OWNER_ID;
+// the chat as Telegram documents once the turn completes. Each caller's
+// `profile` memory (agent/memory/profile.ts) is scoped per-user, so
+// multiple allowlisted users never share saved facts.
+const ALLOWED_USER_IDS = new Set(
+  (process.env.TELEGRAM_ALLOWED_USER_IDS ?? process.env.TELEGRAM_OWNER_ID ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean),
+);
 const OUTPUTS_DIR = join(process.cwd(), "outputs");
 
 const turnStartedAt = new Map<string, number>();
@@ -79,9 +87,9 @@ export default telegramChannel({
   async onMessage(ctx, message) {
     if (message.chat.type !== "private") return null; // groups unsupported
 
-    if (!OWNER_ID || message.from?.id !== OWNER_ID) {
+    if (!message.from || !ALLOWED_USER_IDS.has(String(message.from.id))) {
       await ctx.telegram
-        .sendMessage("This is a private bot — it only responds to its owner.")
+        .sendMessage("This is a private bot — it only responds to allowlisted users.")
         .catch(() => {});
       return null;
     }
